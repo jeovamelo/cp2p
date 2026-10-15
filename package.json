@@ -27,7 +27,6 @@
   "author": "Comunidade Resiliente",
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
     "ws": "^8.18.0"
   }
 }
