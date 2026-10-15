@@ -163,10 +163,10 @@ class StorageManager {
       user.username,
       user.password_hash,
       user.public_key,
-      user.encrypted_private_key,
-      user.role,
-      user.status,
-      user.created_at
+      user.encrypted_private_key || null,
+      user.role || 'Membro',
+      user.status || 'active',
+      user.created_at || Date.now()
     );
     return user;
   }

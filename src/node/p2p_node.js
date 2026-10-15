@@ -345,19 +345,173 @@ class P2PNode {
         });
       }
 
+      if (pathname === '/api/communities' && req.method === 'GET') {
+        const communities = this.storage.getAllCommunities().map(c => {
+          const messages = this.storage.getMessagesByCommunity(c.id, 100);
+          const latest = messages[messages.length - 1];
+          const isAdmin = !!(this.currentUser && (
+            this.currentUser.role === 'Administrador' ||
+            (c.genesis_admin_pubkey && this.currentUser.public_key.replace(/-----[^\n]+-----|\s+/g, '') === c.genesis_admin_pubkey.replace(/-----[^\n]+-----|\s+/g, ''))
+          ));
+          return {
+            ...c,
+            messageCount: messages.length,
+            latestMessage: latest ? this.formatMessageForUI(latest) : null,
+            isAdmin
+          };
+        });
+        return sendJson(200, { communities });
+      }
+
+      if (pathname === '/api/communities' && req.method === 'POST') {
+        const { name, description } = await getBody();
+        if (!name || name.trim() === '') {
+          return sendJson(400, { error: 'O nome da comunidade é obrigatório.' });
+        }
+
+        const id = 'comm-' + name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 25) + '-' + Math.floor(100 + Math.random() * 900);
+        const initialKey = CryptoEngine.generateChannelKey();
+        const genesisAdmin = this.currentUser ? this.currentUser.public_key : 'GENESIS_ADMIN_PENDING';
+
+        const newComm = {
+          id,
+          name: name.trim(),
+          description: description ? description.trim() : 'Comunidade descentralizada P2P',
+          genesis_admin_pubkey: genesisAdmin,
+          current_epoch: 1,
+          created_at: Date.now()
+        };
+
+        this.storage.saveCommunity(newComm);
+        this.storage.saveKeyEpoch(id, 1, initialKey, genesisAdmin);
+        this.auditLogger.log('COMMUNITY_CREATED', genesisAdmin, { communityId: id, name: newComm.name });
+
+        const invitePayload = {
+          type: 'comunidade_resiliente_invite',
+          communityId: id,
+          name: newComm.name,
+          description: newComm.description,
+          genesisAdminPubkey: genesisAdmin,
+          channelKey: initialKey,
+          bootstraps: this.bootstrapNodes
+        };
+        const inviteCode = Buffer.from(JSON.stringify(invitePayload)).toString('base64');
+
+        return sendJson(201, {
+          success: true,
+          community: newComm,
+          inviteCode
+        });
+      }
+
+      const matchInvite = pathname.match(/^\/api\/communities\/([^\/]+)\/invite$/);
+      if (matchInvite && req.method === 'GET') {
+        const commId = decodeURIComponent(matchInvite[1]);
+        const comm = this.storage.getCommunity(commId);
+        if (!comm) return sendJson(404, { error: 'Comunidade não encontrada' });
+        const key = this.storage.getKeyForEpoch(commId, comm.current_epoch);
+        const invitePayload = {
+          type: 'comunidade_resiliente_invite',
+          communityId: comm.id,
+          name: comm.name,
+          description: comm.description,
+          genesisAdminPubkey: comm.genesis_admin_pubkey,
+          channelKey: key,
+          bootstraps: this.bootstrapNodes
+        };
+        const inviteCode = Buffer.from(JSON.stringify(invitePayload)).toString('base64');
+        return sendJson(200, {
+          communityId: comm.id,
+          name: comm.name,
+          inviteCode
+        });
+      }
+
+      if (pathname === '/api/communities/join' && req.method === 'POST') {
+        const { inviteCode } = await getBody();
+        if (!inviteCode) return sendJson(400, { error: 'Código de convite obrigatório' });
+        let inviteData;
+        try {
+          const raw = inviteCode.trim();
+          const jsonStr = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+          inviteData = JSON.parse(jsonStr);
+        } catch (e) {
+          return sendJson(400, { error: 'Código de convite inválido ou corrompido.' });
+        }
+
+        const { communityId, name, description, genesisAdminPubkey, channelKey, bootstraps } = inviteData;
+        if (!communityId || !channelKey) {
+          return sendJson(400, { error: 'Dados do convite incompletos.' });
+        }
+
+        let comm = this.storage.getCommunity(communityId);
+        if (!comm) {
+          comm = {
+            id: communityId,
+            name: name || communityId,
+            description: description || 'Comunidade importada via convite',
+            genesis_admin_pubkey: genesisAdminPubkey || 'GENESIS_ADMIN_PENDING',
+            current_epoch: 1,
+            created_at: Date.now()
+          };
+          this.storage.saveCommunity(comm);
+        }
+
+        this.storage.saveKeyEpoch(communityId, 1, channelKey, genesisAdminPubkey || 'invite');
+
+        if (Array.isArray(bootstraps)) {
+          for (const b of bootstraps) {
+            if (!this.bootstrapNodes.includes(b)) {
+              this.bootstrapNodes.push(b);
+              this.p2p.connectToPeerUrl(b, true);
+            }
+          }
+        }
+
+        for (const socket of this.p2p.peers.values()) {
+          this.p2p.sendSyncRequest(socket, communityId, 0);
+        }
+
+        this.auditLogger.log('COMMUNITY_JOINED', this.currentUser ? this.currentUser.public_key : 'ANONYMOUS', {
+          communityId,
+          name: comm.name
+        });
+
+        return sendJson(200, {
+          success: true,
+          community: comm,
+          message: `Você entrou na comunidade "${comm.name}"!`
+        });
+      }
+
       if (pathname === '/api/messages' && req.method === 'GET') {
-        const rawMessages = this.storage.getMessagesByCommunity('geral', 100);
+        const communityId = url.searchParams.get('communityId') || 'geral';
+        const rawMessages = this.storage.getMessagesByCommunity(communityId, 100);
         const formatted = rawMessages.map(msg => this.formatMessageForUI(msg));
 
         return sendJson(200, {
-          communityId: 'geral',
+          communityId,
           total: formatted.length,
           messages: formatted
         });
       }
 
       if (pathname === '/api/messages' && req.method === 'POST') {
-        if (!this.currentUser || this.currentUser.role !== 'Administrador') {
+        const { text, communityId = 'geral', attachmentType, attachmentData } = await getBody();
+        if (!text || text.trim() === '') {
+          return sendJson(400, { error: 'O texto da mensagem é obrigatório.' });
+        }
+
+        const comm = this.storage.getCommunity(communityId);
+        if (!comm) {
+          return sendJson(404, { error: 'Comunidade não encontrada localmente.' });
+        }
+
+        const isAdminRole = this.currentUser && this.currentUser.role === 'Administrador';
+        const isGenesisAdmin = this.currentUser && this.currentUser.public_key &&
+          (this.currentUser.public_key.replace(/-----[^\n]+-----|\s+/g, '') === (comm.genesis_admin_pubkey || '').replace(/-----[^\n]+-----|\s+/g, ''));
+
+        if (!isAdminRole && !isGenesisAdmin) {
           return sendJson(403, { error: 'Apenas Administradores possuem permissão de publicação nesta comunidade.' });
         }
 
@@ -365,20 +519,14 @@ class P2PNode {
           return sendJson(401, { error: 'Chave privada não está desbloqueada nesta sessão.' });
         }
 
-        const { text, attachmentType, attachmentData } = await getBody();
-        if (!text || text.trim() === '') {
-          return sendJson(400, { error: 'O texto da mensagem é obrigatório.' });
-        }
-
-        const comm = this.storage.getCommunity('geral');
-        const channelKey = this.storage.getKeyForEpoch('geral', comm.current_epoch);
+        const channelKey = this.storage.getKeyForEpoch(communityId, comm.current_epoch);
 
         if (!channelKey) {
           return sendJson(500, { error: 'Chave de criptografia da comunidade não encontrada localmente.' });
         }
 
         const signedMessage = this.chain.createSignedMessage({
-          communityId: 'geral',
+          communityId,
           plaintext: text,
           channelKeyHex: channelKey,
           authorPublicKey: this.currentUser.public_key,

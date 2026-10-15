@@ -43,14 +43,27 @@ async function main() {
   console.log(`✓ Interface Web/PWA disponível em: ${url}`);
   console.log(`✓ Malha P2P escutando na porta: ${p2pPort}`);
 
-  // Abre automaticamente no navegador padrão caso não esteja desabilitado
+  // Abre automaticamente em modo aplicativo desktop dedicado (WhatsApp Desktop style)
   if (process.env.AUTO_OPEN !== 'false') {
-    const startCmd = process.platform === 'win32' ? 'start' : (process.platform === 'darwin' ? 'open' : 'xdg-open');
-    exec(`${startCmd} ${url}`, (err) => {
-      if (err) {
-        console.log(`Para acessar a interface, abra seu navegador em: ${url}`);
-      }
-    });
+    if (process.platform === 'win32') {
+      exec(`start msedge --app="${url}" --window-size=1240,840`, (err) => {
+        if (err) {
+          exec(`start chrome --app="${url}" --window-size=1240,840`, (err2) => {
+            if (err2) {
+              exec(`start ${url}`);
+            }
+          });
+        }
+      });
+    } else if (process.platform === 'darwin') {
+      exec(`open -na "Google Chrome" --args --app="${url}"`, (err) => {
+        if (err) exec(`open "${url}"`);
+      });
+    } else {
+      exec(`google-chrome --app="${url}"`, (err) => {
+        if (err) exec(`xdg-open "${url}"`);
+      });
+    }
   }
 
   process.on('SIGINT', async () => {

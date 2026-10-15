@@ -1,6 +1,9 @@
 /**
- * Comunidade Resiliente - Controlador Frontend da Interface Web & PWA
- * Comunicação bidirecional via WebSocket local (/live) e API REST
+ * Comunidade Resiliente - Controlador Frontend da Interface WhatsApp Desktop P2P
+ * Layout de 3 colunas aos moldes do WhatsApp Desktop / Comunidades:
+ * - Coluna 1: Dock Lateral de Comunidades (Criar, Entrar via Convite, Alternar)
+ * - Coluna 2: Canais & Chats da Comunidade (Avisos Oficiais, Discussão, Topologia)
+ * - Coluna 3: Chat estilo WhatsApp (Bolhas verdes, Assinaturas Ed25519, Duplo Check ✓✓)
  */
 
 class AppController {
@@ -8,7 +11,9 @@ class AppController {
     this.state = {
       user: null,
       network: null,
-      community: null,
+      communities: [],
+      activeCommunityId: 'geral',
+      activeChannel: 'announcements',
       messages: [],
       attachmentBase64: null
     };
@@ -24,31 +29,51 @@ class AppController {
   }
 
   initElements() {
-    // Header status elements
-    this.vpsChip = document.getElementById('vps-status-chip');
-    this.vpsPulse = document.getElementById('vps-pulse-dot');
-    this.vpsLabel = document.getElementById('vps-status-label');
-    this.meshPulse = document.getElementById('mesh-pulse-dot');
-    this.meshLabel = document.getElementById('mesh-status-label');
-    this.leaderLabel = document.getElementById('leader-status-label');
+    // Dock / Rail de Comunidades
+    this.communitiesContainer = document.getElementById('wa-communities-container');
+    this.btnOpenCreateComm = document.getElementById('btn-open-create-comm');
+    this.btnOpenJoinComm = document.getElementById('btn-open-join-comm');
+    this.railMeshDot = document.getElementById('rail-mesh-dot');
+    this.railUserAvatar = document.getElementById('rail-user-avatar');
+    this.btnQuickStatus = document.getElementById('btn-quick-status');
+    this.btnUserProfileQuick = document.getElementById('btn-user-profile-quick');
 
-    // Sidebar elements
+    // Sidebar de Canais & Chats
+    this.activeCommName = document.getElementById('wa-active-comm-name');
+    this.activeCommRole = document.getElementById('wa-active-comm-role');
+    this.btnInviteActiveComm = document.getElementById('btn-invite-active-comm');
+    this.btnCommMenu = document.getElementById('btn-comm-menu');
+    this.searchInput = document.getElementById('wa-search-input');
+    this.channelsList = document.getElementById('wa-channels-list');
+    this.channelSnippet = document.getElementById('wa-snippet-text');
+    this.channelLastTime = document.getElementById('wa-channel-last-time');
+    this.msgCountBadge = document.getElementById('wa-msg-count-badge');
+    this.meshCountLabel = document.getElementById('wa-mesh-count-label');
+
+    // Sidebar Footer (Usuário Ativo)
     this.sidebarAvatar = document.getElementById('sidebar-user-avatar');
     this.sidebarName = document.getElementById('sidebar-user-name');
     this.sidebarRole = document.getElementById('sidebar-user-role');
-    this.sidebarPubkey = document.getElementById('sidebar-pubkey-snippet');
-    this.sidebarMsgCount = document.getElementById('sidebar-msg-count');
-    this.telemetryNodeId = document.getElementById('telemetry-node-id');
-    this.telemetryP2pPort = document.getElementById('telemetry-p2p-port');
-    this.telemetryEpoch = document.getElementById('telemetry-epoch');
-    this.telemetryTerm = document.getElementById('telemetry-term');
+    this.btnCopyPubkey = document.getElementById('btn-copy-pubkey');
 
-    // Feed elements
-    this.vpsBanner = document.getElementById('vps-offline-banner');
+    // Chat Header & Pane
+    this.chatHeaderTitle = document.getElementById('chat-header-title');
+    this.chatHeaderSubtitle = document.getElementById('chat-header-subtitle');
+    this.chatHeaderAvatar = document.getElementById('chat-header-avatar');
+    this.chatScroll = document.getElementById('wa-chat-scroll');
     this.messagesStream = document.getElementById('messages-stream');
     this.emptyState = document.getElementById('empty-state-view');
+    this.vpsOfflineBanner = document.getElementById('vps-offline-banner');
 
-    // Composer elements
+    // Botões de Ação do Chat Header
+    this.btnOpenPeers = document.getElementById('btn-open-peers');
+    this.btnOpenAudit = document.getElementById('btn-open-audit');
+    this.btnOpenBackup = document.getElementById('btn-open-backup');
+    this.btnOpenAdmin = document.getElementById('btn-open-admin');
+    this.btnAuthAction = document.getElementById('btn-auth-action');
+    this.waPeersBtnLabel = document.getElementById('wa-peers-btn-label');
+
+    // Composer
     this.adminComposer = document.getElementById('admin-composer');
     this.memberReadonlyBar = document.getElementById('member-readonly-bar');
     this.composerInput = document.getElementById('composer-input');
@@ -59,24 +84,46 @@ class AppController {
     this.attachmentImg = document.getElementById('attachment-preview-img');
     this.btnRemoveAttachment = document.getElementById('btn-remove-attachment');
 
-    // Buttons
-    this.btnOpenPeers = document.getElementById('btn-open-peers');
-    this.btnOpenAdmin = document.getElementById('btn-open-admin');
-    this.btnOpenAudit = document.getElementById('btn-open-audit');
-    this.btnOpenBackup = document.getElementById('btn-open-backup');
-    this.btnAuthAction = document.getElementById('btn-auth-action');
-    this.btnCopyPubkey = document.getElementById('btn-copy-pubkey');
+    // Modais & Ações
+    this.btnSubmitCreateComm = document.getElementById('btn-submit-create-comm');
+    this.newCommNameInput = document.getElementById('new-comm-name');
+    this.newCommDescInput = document.getElementById('new-comm-desc');
+
+    this.btnSubmitJoinComm = document.getElementById('btn-submit-join-comm');
+    this.joinCommCodeInput = document.getElementById('join-comm-code');
+
+    this.inviteCodeDisplay = document.getElementById('invite-code-display');
+    this.btnCopyInviteCode = document.getElementById('btn-copy-invite-code');
+
+    // Telemetria Modal
+    this.vpsPulse = document.getElementById('vps-pulse-dot');
+    this.vpsLabel = document.getElementById('vps-status-label');
+    this.meshPulse = document.getElementById('mesh-pulse-dot');
+    this.meshLabel = document.getElementById('mesh-status-label');
+    this.leaderLabel = document.getElementById('leader-status-label');
   }
 
   attachEventListeners() {
-    // Modals open
+    // Abrir Modais de Comunidade
+    this.btnOpenCreateComm.addEventListener('click', () => this.openModal('modal-create-comm'));
+    this.btnOpenJoinComm.addEventListener('click', () => this.openModal('modal-join-comm'));
+    this.btnInviteActiveComm.addEventListener('click', () => this.openInviteModalForActive());
+
+    // Botões de Criar e Entrar
+    this.btnSubmitCreateComm.addEventListener('click', () => this.handleCreateCommunity());
+    this.btnSubmitJoinComm.addEventListener('click', () => this.handleJoinCommunity());
+    this.btnCopyInviteCode.addEventListener('click', () => this.copyInviteCodeToClipboard());
+
+    // Modais do Chat Header
     this.btnOpenPeers.addEventListener('click', () => this.openPeersModal());
-    this.btnOpenAdmin.addEventListener('click', () => this.openAdminModal());
     this.btnOpenAudit.addEventListener('click', () => this.openAuditModal());
     this.btnOpenBackup.addEventListener('click', () => this.openModal('modal-backup'));
+    this.btnOpenAdmin.addEventListener('click', () => this.openAdminModal());
     this.btnAuthAction.addEventListener('click', () => this.openModal('modal-auth'));
+    this.btnQuickStatus.addEventListener('click', () => this.openPeersModal());
+    this.btnUserProfileQuick.addEventListener('click', () => this.openModal('modal-auth'));
 
-    // Modals close buttons
+    // Fechar Modais
     document.querySelectorAll('[data-close]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const modalId = e.currentTarget.getAttribute('data-close');
@@ -84,32 +131,56 @@ class AppController {
       });
     });
 
-    // Close on overlay click
     document.querySelectorAll('.modal-overlay').forEach(modal => {
       modal.addEventListener('click', (e) => {
         if (e.target === modal) this.closeModal(modal.id);
       });
     });
 
-    // Copy public key
+    // Copiar chave pública
     this.btnCopyPubkey.addEventListener('click', () => {
       if (this.state.user && this.state.user.publicKey) {
         navigator.clipboard.writeText(this.state.user.publicKey);
-        this.showToast('Chave pública copiada para a área de transferência!');
+        this.showToast('Chave pública copiada com sucesso!');
       }
     });
 
-    // Composer Image Attachment
+    // Anexo de Imagem
     this.btnAttachImage.addEventListener('click', () => this.fileAttachmentInput.click());
     this.fileAttachmentInput.addEventListener('change', (e) => this.handleFileSelect(e));
     this.btnRemoveAttachment.addEventListener('click', () => this.removeAttachment());
 
-    // Publish Announcement
+    // Publicação de Comunicado
     this.btnPublish.addEventListener('click', () => this.publishAnnouncement());
     this.composerInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
         this.publishAnnouncement();
       }
+    });
+
+    // Pesquisa em Tempo Real
+    this.searchInput.addEventListener('input', (e) => this.filterMessagesByQuery(e.target.value));
+
+    // Abas de Filtro
+    document.querySelectorAll('.wa-filter-chip').forEach(chip => {
+      chip.addEventListener('click', (e) => {
+        document.querySelectorAll('.wa-filter-chip').forEach(c => c.classList.remove('active'));
+        e.currentTarget.classList.add('active');
+        const filter = e.currentTarget.getAttribute('data-filter');
+        this.applyCategoryFilter(filter);
+      });
+    });
+
+    // Canais da Sidebar
+    document.querySelectorAll('.wa-channel-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        document.querySelectorAll('.wa-channel-item').forEach(c => c.classList.remove('active'));
+        const el = e.currentTarget;
+        el.classList.add('active');
+        const channelType = el.getAttribute('data-channel');
+        this.switchChannel(channelType);
+      });
     });
 
     // Auth modal actions
@@ -119,18 +190,236 @@ class AppController {
 
   async loadInitialData() {
     try {
+      // 1. Status Geral e Usuário
       const res = await fetch('/api/status');
       const data = await res.json();
       this.updateStatusUI(data);
 
-      const msgRes = await fetch('/api/messages');
-      const msgData = await msgRes.json();
-      this.renderMessages(msgData.messages || []);
+      // 2. Carrega Lista de Comunidades
+      await this.loadCommunities();
+
+      // 3. Carrega Mensagens da Comunidade Ativa
+      await this.loadMessages(this.state.activeCommunityId);
     } catch (e) {
       console.warn('Erro ao carregar dados iniciais:', e);
     }
   }
 
+  async loadCommunities() {
+    try {
+      const res = await fetch('/api/communities');
+      const data = await res.json();
+      this.state.communities = data.communities || [];
+
+      if (this.state.communities.length > 0) {
+        const found = this.state.communities.find(c => c.id === this.state.activeCommunityId);
+        if (!found) {
+          this.state.activeCommunityId = this.state.communities[0].id;
+        }
+      }
+
+      this.renderCommunitiesRail();
+      this.updateActiveCommunityHeader();
+    } catch (e) {
+      console.error('Erro ao carregar comunidades:', e);
+    }
+  }
+
+  renderCommunitiesRail() {
+    this.communitiesContainer.innerHTML = '';
+
+    this.state.communities.forEach(comm => {
+      const circle = document.createElement('div');
+      circle.className = `wa-comm-circle ${comm.id === this.state.activeCommunityId ? 'active' : ''}`;
+      circle.setAttribute('title', comm.name);
+
+      // Iniciais da comunidade (máximo 2 letras)
+      const words = comm.name.trim().split(/\s+/);
+      const initials = words.length >= 2 
+        ? (words[0][0] + words[1][0]).toUpperCase()
+        : comm.name.slice(0, 2).toUpperCase();
+
+      circle.textContent = initials;
+
+      circle.addEventListener('click', () => {
+        if (this.state.activeCommunityId !== comm.id) {
+          this.switchCommunity(comm.id);
+        }
+      });
+
+      this.communitiesContainer.appendChild(circle);
+    });
+  }
+
+  switchCommunity(communityId) {
+    this.state.activeCommunityId = communityId;
+    this.renderCommunitiesRail();
+    this.updateActiveCommunityHeader();
+    this.loadMessages(communityId);
+  }
+
+  updateActiveCommunityHeader() {
+    const active = this.state.communities.find(c => c.id === this.state.activeCommunityId);
+    if (!active) return;
+
+    this.activeCommName.textContent = active.name;
+    this.activeCommRole.textContent = active.isAdmin ? 'Administrador' : 'Membro';
+
+    if (this.state.activeChannel === 'announcements') {
+      this.chatHeaderTitle.textContent = `Avisos Oficiais • ${active.name}`;
+      this.chatHeaderSubtitle.textContent = active.description || 'Canal oficial • Apenas administradores podem publicar • E2EE P2P';
+    }
+
+    this.updateComposerPermissions(active);
+  }
+
+  updateComposerPermissions(activeComm) {
+    const isAdmin = activeComm ? activeComm.isAdmin : (this.state.user && this.state.user.role === 'Administrador');
+
+    if (isAdmin) {
+      this.adminComposer.style.display = 'flex';
+      this.memberReadonlyBar.style.display = 'none';
+    } else {
+      this.adminComposer.style.display = 'none';
+      this.memberReadonlyBar.style.display = 'flex';
+    }
+  }
+
+  async loadMessages(communityId) {
+    try {
+      const res = await fetch(`/api/messages?communityId=${encodeURIComponent(communityId)}`);
+      const data = await res.json();
+      this.renderMessages(data.messages || []);
+    } catch (e) {
+      console.error('Erro ao carregar mensagens da comunidade:', e);
+    }
+  }
+
+  switchChannel(channelType) {
+    this.state.activeChannel = channelType;
+    const activeComm = this.state.communities.find(c => c.id === this.state.activeCommunityId);
+    const commName = activeComm ? activeComm.name : 'Comunidade';
+
+    if (channelType === 'announcements') {
+      this.chatHeaderAvatar.textContent = '📢';
+      this.chatHeaderTitle.textContent = `Avisos Oficiais • ${commName}`;
+      this.chatHeaderSubtitle.textContent = 'somente administradores podem publicar • E2EE P2P';
+      this.updateComposerPermissions(activeComm);
+      this.loadMessages(this.state.activeCommunityId);
+    } else if (channelType === 'discussion') {
+      this.chatHeaderAvatar.textContent = '💬';
+      this.chatHeaderTitle.textContent = `Discussão da Comunidade • ${commName}`;
+      this.chatHeaderSubtitle.textContent = 'Espaço aberto de troca e suporte mútuo entre membros';
+      this.adminComposer.style.display = 'none';
+      this.memberReadonlyBar.style.display = 'flex';
+      this.memberReadonlyBar.querySelector('span').textContent = 'Canal de Discussão aberto: use para interagir com a comunidade.';
+    } else if (channelType === 'network') {
+      this.openPeersModal();
+    }
+  }
+
+  // --- CRIAÇÃO E CONVITES DE COMUNIDADE ---
+  async handleCreateCommunity() {
+    const name = this.newCommNameInput.value.trim();
+    const description = this.newCommDescInput.value.trim();
+
+    if (!name) {
+      alert('Digite o nome da comunidade.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/communities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Erro ao criar comunidade.');
+        return;
+      }
+
+      this.closeModal('modal-create-comm');
+      this.newCommNameInput.value = '';
+      this.newCommDescInput.value = '';
+
+      this.showToast(`Comunidade "${name}" criada com sucesso!`);
+
+      await this.loadCommunities();
+      this.switchCommunity(data.community.id);
+
+      // Exibe imediatamente o código de convite para compartilhar
+      this.inviteCodeDisplay.value = data.inviteCode;
+      this.openModal('modal-invite-share');
+    } catch (e) {
+      alert('Erro de rede ao criar comunidade.');
+    }
+  }
+
+  async handleJoinCommunity() {
+    const inviteCode = this.joinCommCodeInput.value.trim();
+    if (!inviteCode) {
+      alert('Cole o código de convite da comunidade.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/communities/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inviteCode })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Erro ao entrar na comunidade.');
+        return;
+      }
+
+      this.closeModal('modal-join-comm');
+      this.joinCommCodeInput.value = '';
+
+      this.showToast(data.message || 'Entrou na comunidade com sucesso!');
+
+      await this.loadCommunities();
+      this.switchCommunity(data.community.id);
+    } catch (e) {
+      alert('Erro de rede ao entrar na comunidade.');
+    }
+  }
+
+  async openInviteModalForActive() {
+    try {
+      const res = await fetch(`/api/communities/${encodeURIComponent(this.state.activeCommunityId)}/invite`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.error || 'Erro ao gerar convite.');
+        return;
+      }
+
+      this.inviteCodeDisplay.value = data.inviteCode;
+      this.openModal('modal-invite-share');
+    } catch (e) {
+      alert('Erro ao carregar código de convite.');
+    }
+  }
+
+  copyInviteCodeToClipboard() {
+    const code = this.inviteCodeDisplay.value;
+    if (code) {
+      navigator.clipboard.writeText(code);
+      this.showToast('Código de convite copiado para a área de transferência!');
+      this.btnCopyInviteCode.textContent = '✓ Copiado com Sucesso!';
+      setTimeout(() => {
+        this.btnCopyInviteCode.textContent = 'Copiar Código de Convite';
+      }, 2500);
+    }
+  }
+
+  // --- WEBSOCKET LIVE ---
   connectLiveWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/live`;
@@ -138,7 +427,7 @@ class AppController {
     this.liveSocket = new WebSocket(wsUrl);
 
     this.liveSocket.onopen = () => {
-      console.log('[Live WS] Conectado ao nó local P2P.');
+      console.log('[WhatsApp Desktop P2P] Conectado ao daemon local.');
       if (this.reconnectTimer) clearInterval(this.reconnectTimer);
     };
 
@@ -147,12 +436,11 @@ class AppController {
         const packet = JSON.parse(event.data);
         this.handleLiveEvent(packet);
       } catch (err) {
-        console.error('Erro ao processar pacote live:', err);
+        console.error('Erro ao processar mensagem live:', err);
       }
     };
 
     this.liveSocket.onclose = () => {
-      console.warn('[Live WS] Desconectado. Tentando reconectar...');
       this.reconnectTimer = setTimeout(() => this.connectLiveWebSocket(), 3000);
     };
   }
@@ -165,7 +453,10 @@ class AppController {
         break;
 
       case 'NEW_MESSAGE':
-        this.appendMessage(event.message);
+        if (event.message.communityId === this.state.activeCommunityId) {
+          this.appendMessage(event.message);
+        }
+        this.updateSidebarSnippet(event.message);
         break;
 
       case 'PEER_CHANGE':
@@ -186,151 +477,143 @@ class AppController {
   updateStatusUI(statusData) {
     if (statusData.user) this.updateUserUI(statusData.user);
     if (statusData.network) this.updateNetworkUI(statusData.network);
-    if (statusData.community) {
-      this.telemetryEpoch.textContent = `Época #${statusData.community.current_epoch}`;
-    }
-    this.telemetryNodeId.textContent = statusData.nodeId || '--';
-    this.telemetryP2pPort.textContent = statusData.p2pPort ? `:${statusData.p2pPort}` : '--';
   }
 
   updateUserUI(user) {
     this.state.user = user;
     this.sidebarName.textContent = user.username;
     this.sidebarAvatar.textContent = user.username.charAt(0).toUpperCase();
+    this.railUserAvatar.textContent = user.username.charAt(0).toUpperCase();
 
     this.sidebarRole.textContent = user.role;
-    this.sidebarRole.className = `role-badge ${user.role === 'Administrador' ? 'admin' : (user.role === 'Moderador' ? 'mod' : 'member')}`;
+    this.sidebarRole.className = `wa-footer-role ${user.role === 'Administrador' ? 'admin' : (user.role === 'Moderador' ? 'mod' : 'member')}`;
 
-    if (user.publicKey) {
-      const clean = user.publicKey.replace(/-----BEGIN PUBLIC KEY-----|\n|-----END PUBLIC KEY-----/g, '').trim();
-      this.sidebarPubkey.textContent = `Chave: ${clean.substring(0, 14)}...`;
-    }
-
-    // Controle de permissão de publicação na UI: Apenas Administrador vê o composer ativo!
-    if (user.role === 'Administrador') {
-      this.adminComposer.style.display = 'flex';
-      this.memberReadonlyBar.style.display = 'none';
-    } else {
-      this.adminComposer.style.display = 'none';
-      this.memberReadonlyBar.style.display = 'flex';
-    }
+    const activeComm = this.state.communities.find(c => c.id === this.state.activeCommunityId);
+    this.updateComposerPermissions(activeComm);
   }
 
   updateNetworkUI(net) {
     this.state.network = net;
 
-    // 1. VPS Status
+    // VPS Status
     if (net.isVpsAlive) {
-      this.vpsPulse.className = 'pulse-dot online';
-      this.vpsLabel.textContent = 'VPS: Online';
-      this.vpsBanner.style.display = 'none';
+      this.railMeshDot.className = 'pulse-dot online';
+      this.vpsOfflineBanner.style.display = 'none';
+      if (this.vpsPulse) this.vpsPulse.className = 'pulse-dot online';
+      if (this.vpsLabel) this.vpsLabel.textContent = 'VPS: Online';
     } else {
-      this.vpsPulse.className = 'pulse-dot warning';
-      this.vpsLabel.textContent = 'VPS: Offline (Malha Ativa)';
-      this.vpsBanner.style.display = 'flex';
+      this.railMeshDot.className = 'pulse-dot warning';
+      this.vpsOfflineBanner.style.display = 'flex';
+      if (this.vpsPulse) this.vpsPulse.className = 'pulse-dot warning';
+      if (this.vpsLabel) this.vpsLabel.textContent = 'VPS: Offline (Malha Ativa)';
     }
 
-    // 2. Mesh Peers Count
+    // Peers Count
     const peerCount = net.activePeersCount || 0;
-    this.meshLabel.textContent = `Malha P2P: ${peerCount} nó${peerCount === 1 ? '' : 's'}`;
-    this.meshPulse.className = peerCount > 0 ? 'pulse-dot online' : 'pulse-dot warning';
+    this.waPeersBtnLabel.textContent = `Nós P2P (${peerCount})`;
+    this.meshCountLabel.textContent = `${peerCount} nós`;
 
-    // 3. Líder Eleito
-    if (net.currentLeader) {
-      const leaderName = net.isLeader ? `${net.currentLeader} (Este Nó)` : net.currentLeader;
+    if (this.meshPulse) this.meshPulse.className = peerCount > 0 ? 'pulse-dot online' : 'pulse-dot warning';
+    if (this.meshLabel) this.meshLabel.textContent = `Malha: ${peerCount} nó${peerCount === 1 ? '' : 's'}`;
+
+    // Líder
+    if (this.leaderLabel) {
+      const leaderName = net.isLeader ? `${net.currentLeader} (Este Nó)` : (net.currentLeader || '--');
       this.leaderLabel.textContent = `Líder: ${leaderName}`;
-    } else {
-      this.leaderLabel.textContent = 'Líder: Em eleição...';
     }
-
-    // 4. Telemetria
-    if (net.term) this.telemetryTerm.textContent = `Termo ${net.term}`;
   }
 
   renderMessages(messages) {
     this.state.messages = messages;
-    this.sidebarMsgCount.textContent = `${messages.length} msg${messages.length === 1 ? '' : 's'}`;
+    this.msgCountBadge.textContent = messages.length;
 
     if (messages.length === 0) {
       this.emptyState.style.display = 'block';
+      const bubbles = this.messagesStream.querySelectorAll('.wa-bubble-message');
+      bubbles.forEach(b => b.remove());
       return;
     }
 
     this.emptyState.style.display = 'none';
-    // Remove mensagens existentes mantendo o emptyState
-    const cards = this.messagesStream.querySelectorAll('.message-card');
-    cards.forEach(c => c.remove());
+    const bubbles = this.messagesStream.querySelectorAll('.wa-bubble-message');
+    bubbles.forEach(b => b.remove());
 
     messages.forEach(msg => {
-      const card = this.createMessageCard(msg);
-      this.messagesStream.appendChild(card);
+      const bubble = this.createMessageBubble(msg);
+      this.messagesStream.appendChild(bubble);
     });
+
+    const last = messages[messages.length - 1];
+    if (last) this.updateSidebarSnippet(last);
 
     this.scrollToBottom();
   }
 
   appendMessage(msg) {
-    // Evita duplicatas na UI
     if (this.state.messages.some(m => m.id === msg.id)) return;
 
     this.state.messages.push(msg);
     this.emptyState.style.display = 'none';
-    this.sidebarMsgCount.textContent = `${this.state.messages.length} msg${this.state.messages.length === 1 ? '' : 's'}`;
+    this.msgCountBadge.textContent = this.state.messages.length;
 
-    const card = this.createMessageCard(msg);
-    this.messagesStream.appendChild(card);
+    const bubble = this.createMessageBubble(msg);
+    this.messagesStream.appendChild(bubble);
+    this.updateSidebarSnippet(msg);
     this.scrollToBottom();
   }
 
-  createMessageCard(msg) {
-    const card = document.createElement('div');
-    card.className = 'message-card';
-    card.id = `msg-${msg.id}`;
+  createMessageBubble(msg) {
+    const bubble = document.createElement('div');
+    bubble.className = 'wa-bubble-message admin-announcement';
+    bubble.id = `msg-${msg.id}`;
 
-    const dateStr = new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const dateStr = new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
     let attachmentHtml = '';
     if (msg.attachmentType === 'image' && msg.attachmentData) {
       attachmentHtml = `
-        <div class="msg-attachment">
+        <div class="wa-bubble-attachment">
           <img src="${msg.attachmentData}" alt="Imagem do comunicado" loading="lazy">
         </div>
       `;
     }
 
-    card.innerHTML = `
-      <div class="msg-header">
-        <div class="msg-author-row">
-          <span class="author-name">${this.escapeHtml(msg.authorName)}</span>
-          <span class="role-badge admin" style="font-size: 0.65rem;">ADMIN</span>
-          <span class="sequence-badge">#${msg.sequence}</span>
-        </div>
-        <span class="msg-timestamp">${dateStr}</span>
+    bubble.innerHTML = `
+      <div class="wa-bubble-header">
+        <span class="wa-bubble-author">
+          ${this.escapeHtml(msg.authorName)}
+          <span class="wa-badge-admin">ADMINISTRADOR</span>
+          <span class="wa-badge-verified">✓ Ed25519</span>
+        </span>
+        <span class="wa-bubble-seq">#${msg.sequence}</span>
       </div>
 
-      <div class="msg-body">${this.escapeHtml(msg.text)}</div>
+      <div class="wa-bubble-text">${this.escapeHtml(msg.text)}</div>
 
       ${attachmentHtml}
 
-      <div class="msg-footer">
-        <div class="signature-verified">
-          <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
-          Assinatura Ed25519 Válida
-        </div>
-        <div class="hash-id" title="Hash SHA-256 do Bloco: ${msg.id}">
-          ID: ${msg.id.substring(0, 16)}...
-        </div>
-        <div>Época #${msg.epoch}</div>
+      <div class="wa-bubble-footer">
+        <span class="wa-bubble-time">${dateStr}</span>
+        <span class="wa-bubble-checks" title="Verificado na rede P2P">✓✓</span>
       </div>
     `;
 
-    return card;
+    return bubble;
+  }
+
+  updateSidebarSnippet(msg) {
+    this.channelSnippet.textContent = msg.text.length > 40 ? msg.text.slice(0, 40) + '...' : msg.text;
+    const timeStr = new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    this.channelLastTime.textContent = timeStr;
   }
 
   scrollToBottom() {
-    this.messagesStream.scrollTop = this.messagesStream.scrollHeight;
+    if (this.chatScroll) {
+      this.chatScroll.scrollTop = this.chatScroll.scrollHeight;
+    }
   }
 
+  // --- COMPOSER ANEXO & PUBLICAÇÃO ---
   handleFileSelect(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -361,13 +644,13 @@ class AppController {
     if (!text) return;
 
     this.btnPublish.disabled = true;
-    this.btnPublish.style.opacity = '0.6';
 
     try {
       const payload = {
+        communityId: this.state.activeCommunityId,
         text,
         attachmentType: this.state.attachmentBase64 ? 'image' : null,
-        attachmentData: this.state.attachmentBase64
+        attachmentData: this.state.attachmentBase64 || null
       };
 
       const res = await fetch('/api/messages', {
@@ -378,17 +661,36 @@ class AppController {
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Erro ao publicar mensagem');
+        alert(data.error || 'Erro ao publicar comunicado.');
+        return;
       }
 
       this.composerInput.value = '';
       this.removeAttachment();
-      this.showToast('Comunicado assinado e difundido na malha P2P com sucesso!');
-    } catch (err) {
-      alert(`Falha ao publicar: ${err.message}`);
+      this.showToast('Comunicado assinado e replicado via P2P!');
+    } catch (e) {
+      alert('Erro de rede ao publicar comunicado.');
     } finally {
       this.btnPublish.disabled = false;
-      this.btnPublish.style.opacity = '1';
+      this.composerInput.focus();
+    }
+  }
+
+  filterMessagesByQuery(query) {
+    const q = query.toLowerCase().trim();
+    const bubbles = this.messagesStream.querySelectorAll('.wa-bubble-message');
+
+    bubbles.forEach(b => {
+      const text = b.textContent.toLowerCase();
+      b.style.display = text.includes(q) ? 'block' : 'none';
+    });
+  }
+
+  applyCategoryFilter(filter) {
+    if (filter === 'all' || filter === 'announcements') {
+      this.switchChannel('announcements');
+    } else if (filter === 'peers') {
+      this.openPeersModal();
     }
   }
 
@@ -405,82 +707,61 @@ class AppController {
 
   async openPeersModal() {
     this.openModal('modal-peers');
-    const container = document.getElementById('modal-peers-list');
-    container.innerHTML = '<p style="color: var(--text-dim);">Carregando nós...</p>';
-
     try {
-      const res = await fetch('/api/peers');
+      const res = await fetch('/api/status');
       const data = await res.json();
-      const peers = data.peers || [];
+      const listEl = document.getElementById('modal-peers-list');
+      listEl.innerHTML = '';
 
+      const peers = (data.network && data.network.knownPeers) || [];
       if (peers.length === 0) {
-        container.innerHTML = '<p style="color: var(--text-dim); grid-column: span 2;">Nenhum nó remoto conectado no momento.</p>';
+        listEl.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">Nenhum nó vizinho descoberto ainda.</p>';
         return;
       }
 
-      container.innerHTML = peers.map(p => `
-        <div class="peer-card ${p.status === 'alive' ? 'active' : ''}">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span class="peer-id-label">${p.node_id}</span>
-            <span class="role-badge ${p.is_bootstrap ? 'admin' : 'member'}" style="font-size: 0.65rem;">
-              ${p.is_bootstrap ? 'Bootstrap VPS' : 'Nó Pessoal'}
-            </span>
+      peers.forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'peer-card';
+        item.innerHTML = `
+          <div>
+            <div class="peer-id">${p.nodeId || `${p.host}:${p.port}`}</div>
+            <div class="peer-meta">${p.host}:${p.port} • ${p.isBootstrap ? 'Bootstrap / VPS' : 'Nó Pessoal'}</div>
           </div>
-          <div style="font-size: 0.78rem; color: var(--text-muted);">
-            Endereço: <code>${p.host}:${p.port}</code>
-          </div>
-          <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-dim);">
-            <span>Status: <strong>${p.status}</strong></span>
-            <span>Ping: ${p.latency}ms</span>
-          </div>
-        </div>
-      `).join('');
-    } catch (e) {
-      container.innerHTML = '<p style="color: var(--accent-rose);">Erro ao consultar nós P2P.</p>';
-    }
+          <span class="role-badge member">Conectado</span>
+        `;
+        listEl.appendChild(item);
+      });
+    } catch (e) {}
   }
 
   async openAdminModal() {
     this.openModal('modal-admin');
-    const container = document.getElementById('admin-users-list');
-    container.innerHTML = '<p style="color: var(--text-dim);">Carregando usuários...</p>';
-
     try {
       const res = await fetch('/api/users');
       const data = await res.json();
-      const users = data.users || [];
+      const listEl = document.getElementById('admin-users-list');
+      listEl.innerHTML = '';
 
-      container.innerHTML = users.map(u => `
-        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); border-radius: 8px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
+      (data.users || []).forEach(u => {
+        const row = document.createElement('div');
+        row.className = 'user-item-row';
+        row.innerHTML = `
           <div>
-            <strong>${this.escapeHtml(u.username)}</strong>
-            <span class="role-badge ${u.role === 'Administrador' ? 'admin' : (u.role === 'Moderador' ? 'mod' : 'member')}" style="font-size: 0.65rem; margin-left: 8px;">
-              ${u.role}
-            </span>
-            <div style="font-size: 0.72rem; color: var(--text-dim); font-family: var(--font-mono); margin-top: 4px;">
-              ID: ${u.id} • Status: <span style="color: ${u.status === 'active' ? 'var(--accent-emerald)' : 'var(--accent-rose)'};">${u.status}</span>
-            </div>
+            <div class="user-item-name">${this.escapeHtml(u.username)}</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted);">${u.role} • ${u.status}</div>
           </div>
-
-          <div style="display: flex; gap: 8px;">
-            ${u.status === 'active' && u.role !== 'Administrador' ? `
-              <button class="btn-tool" onclick="window.app.promoteUser('${u.id}', '${u.role === 'Membro' ? 'Moderador' : 'Membro'}')">
-                ${u.role === 'Membro' ? 'Promover a Mod' : 'Rebaixar a Membro'}
-              </button>
-              <button class="btn-tool" style="color: var(--accent-rose); border-color: rgba(244,63,94,0.3);" onclick="window.app.revokeUser('${u.id}', '${this.escapeHtml(u.username)}')">
-                Revogar Acesso
-              </button>
-            ` : ''}
+          <div class="user-item-actions">
+            ${u.role !== 'Administrador' ? `<button class="btn-sm-action" onclick="app.updateRole('${u.id}', 'Administrador')">Promover a Admin</button>` : ''}
+            ${u.status !== 'revoked' ? `<button class="btn-sm-action danger" onclick="app.revokeUser('${u.id}')">Revogar & Rotacionar Chave</button>` : ''}
           </div>
-        </div>
-      `).join('');
-    } catch (e) {
-      container.innerHTML = '<p style="color: var(--accent-rose);">Erro ao carregar usuários.</p>';
-    }
+        `;
+        listEl.appendChild(row);
+      });
+    } catch (e) {}
   }
 
-  async promoteUser(userId, newRole) {
-    if (!confirm(`Deseja alterar o papel deste usuário para ${newRole}?`)) return;
+  async updateRole(userId, newRole) {
+    if (!confirm(`Confirma alterar papel do usuário para ${newRole}?`)) return;
     try {
       const res = await fetch('/api/admin/role', {
         method: 'POST',
@@ -488,17 +769,14 @@ class AppController {
         body: JSON.stringify({ userId, newRole })
       });
       if (res.ok) {
-        this.showToast(`Papel atualizado com sucesso!`);
+        this.showToast('Papel alterado com sucesso!');
         this.openAdminModal();
       }
-    } catch (e) {
-      alert('Falha ao atualizar papel.');
-    }
+    } catch (e) {}
   }
 
-  async revokeUser(userId, username) {
-    if (!confirm(`ATENÇÃO: Revogar o usuário "${username}" ativará imediatamente a Rotação de Chaves Criptográficas da Comunidade (Key Rotation). Uma nova chave de canal será criada. Deseja prosseguir?`)) return;
-
+  async revokeUser(userId) {
+    if (!confirm('ATENÇÃO: Revogar o usuário gerará uma NOVA ÉPOCA CRIPTOGRÁFICA (Key Rotation). O membro revogado não poderá ler mensagens futuras. Deseja continuar?')) return;
     try {
       const res = await fetch('/api/admin/revoke', {
         method: 'POST',
@@ -507,63 +785,40 @@ class AppController {
       });
       const data = await res.json();
       if (res.ok) {
-        alert(data.message);
+        this.showToast(data.message || 'Membro revogado e chave rotacionada!');
         this.openAdminModal();
-        this.loadInitialData();
-      } else {
-        alert(`Erro: ${data.error}`);
       }
-    } catch (e) {
-      alert('Falha ao revogar usuário.');
-    }
+    } catch (e) {}
   }
 
   async openAuditModal() {
     this.openModal('modal-audit');
-    const container = document.getElementById('audit-logs-list');
-    const statusBadge = document.getElementById('audit-integrity-status');
-    container.innerHTML = '<p style="color: var(--text-dim);">Verificando integridade da cadeia de auditoria...</p>';
-
     try {
       const res = await fetch('/api/audit');
       const data = await res.json();
+      const listEl = document.getElementById('audit-logs-list');
+      listEl.innerHTML = '';
 
-      if (data.integrity.valid) {
-        statusBadge.innerHTML = '✓ Cadeia de Auditoria Verificada e 100% Íntegra';
-        statusBadge.style.color = 'var(--accent-emerald)';
-      } else {
-        statusBadge.innerHTML = `⚠️ Cadeia adulterada! Inconsistência no bloco #${data.integrity.corruptedAt}`;
-        statusBadge.style.color = 'var(--accent-rose)';
-      }
-
-      const logs = data.logs || [];
-      container.innerHTML = logs.map(l => {
-        const time = new Date(l.timestamp).toLocaleString('pt-BR');
-        return `
-          <div style="background: rgba(0,0,0,0.3); border-left: 3px solid var(--accent-cyan); padding: 8px 12px; border-radius: 4px;">
-            <div style="display: flex; justify-content: space-between; color: var(--accent-cyan);">
-              <strong>${l.action}</strong>
-              <span style="color: var(--text-dim);">${time}</span>
-            </div>
-            <div style="color: var(--text-muted); margin-top: 4px; word-break: break-all;">
-              ${this.escapeHtml(l.details)}
-            </div>
-            <div style="color: var(--text-dim); font-size: 0.68rem; margin-top: 4px;">
-              Hash: ${l.audit_hash.substring(0, 20)}... | Prev: ${l.prev_audit_hash.substring(0, 10)}...
-            </div>
-          </div>
+      (data.logs || []).slice(0, 15).forEach(log => {
+        const item = document.createElement('div');
+        item.style.background = 'rgba(255,255,255,0.03)';
+        item.style.padding = '8px 10px';
+        item.style.borderRadius = '6px';
+        item.innerHTML = `
+          <div style="color: var(--wa-green); font-weight: 600;">${log.action}</div>
+          <div style="color: var(--text-muted); font-size: 0.7rem;">${new Date(log.timestamp).toLocaleString()}</div>
+          <div style="word-break: break-all; margin-top: 3px; color: #cbd5e1;">Hash: ${log.audit_hash}</div>
         `;
-      }).join('');
-    } catch (e) {
-      container.innerHTML = '<p style="color: var(--accent-rose);">Erro ao consultar logs de auditoria.</p>';
-    }
+        listEl.appendChild(item);
+      });
+    } catch (e) {}
   }
 
-  // --- AUTENTICAÇÃO ---
   async handleLogin() {
     const username = document.getElementById('auth-username').value.trim();
-    const password = document.getElementById('auth-password').value;
-    if (!username || !password) return alert('Informe usuário e senha');
+    const password = document.getElementById('auth-password').value.trim();
+
+    if (!username || !password) return alert('Preencha usuário e senha.');
 
     try {
       const res = await fetch('/api/auth/login', {
@@ -571,23 +826,25 @@ class AppController {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
 
-      this.closeModal('modal-auth');
+      const data = await res.json();
+      if (!res.ok) return alert(data.error || 'Erro ao autenticar.');
+
       this.updateUserUI(data.user);
+      this.closeModal('modal-auth');
       this.showToast(`Bem-vindo, ${data.user.username}!`);
-      this.loadInitialData();
+      await this.loadCommunities();
     } catch (e) {
-      alert(`Falha no login: ${e.message}`);
+      alert('Erro de conexão ao autenticar.');
     }
   }
 
   async handleRegister() {
     const username = document.getElementById('auth-username').value.trim();
-    const password = document.getElementById('auth-password').value;
+    const password = document.getElementById('auth-password').value.trim();
     const role = document.getElementById('auth-role').value;
-    if (!username || !password) return alert('Informe usuário e senha');
+
+    if (!username || !password) return alert('Preencha usuário e senha.');
 
     try {
       const res = await fetch('/api/auth/register', {
@@ -595,19 +852,37 @@ class AppController {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, role })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
 
-      this.closeModal('modal-auth');
+      const data = await res.json();
+      if (!res.ok) return alert(data.error || 'Erro ao registrar.');
+
       this.updateUserUI(data.user);
-      this.showToast(`Conta criada com sucesso com papel de ${data.user.role}!`);
-      this.loadInitialData();
+      this.closeModal('modal-auth');
+      this.showToast(`Conta criada com sucesso!`);
+      await this.loadCommunities();
     } catch (e) {
-      alert(`Falha ao registrar: ${e.message}`);
+      alert('Erro de conexão ao registrar.');
     }
   }
 
-  // --- NOTIFICAÇÕES PWA / BROWSER ---
+  showToast(message) {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+  }
+
+  showBrowserNotification(notif) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(notif.title || 'Comunidade Resiliente', {
+        body: notif.body || 'Novo comunicado oficial assinado.',
+        icon: '/icons/icon-192.png'
+      });
+    }
+  }
+
   registerServiceWorker() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -617,44 +892,15 @@ class AppController {
     }
   }
 
-  showBrowserNotification(notif) {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification(notif.title, {
-        body: notif.body,
-        icon: '/manifest.json'
-      });
-    }
-  }
-
-  showToast(message) {
-    const toast = document.createElement('div');
-    toast.style.position = 'fixed';
-    toast.style.bottom = '30px';
-    toast.style.right = '30px';
-    toast.style.background = '#10b981';
-    toast.style.color = '#fff';
-    toast.style.padding = '12px 20px';
-    toast.style.borderRadius = '8px';
-    toast.style.fontWeight = '600';
-    toast.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
-    toast.style.zIndex = '9999';
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
-  }
-
   escapeHtml(str) {
     if (!str) return '';
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
   }
 }
 
 // Inicializa a aplicação
-window.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', () => {
   window.app = new AppController();
 });
