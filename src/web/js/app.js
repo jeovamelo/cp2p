@@ -258,6 +258,14 @@ class AppController {
 
   async loadInitialData() {
     try {
+      // 0. Configurações Centrais do Domínio e Ambiente
+      try {
+        const cfgRes = await fetch('/api/config');
+        if (cfgRes.ok) {
+          window.__APP_CONFIG__ = await cfgRes.json();
+        }
+      } catch (errCfg) {}
+
       // 1. Status Geral e Usuário
       const res = await fetch('/api/status');
       const data = await res.json();
@@ -487,16 +495,32 @@ class AppController {
     }
   }
 
-  // --- WEBSOCKET LIVE ---
+  // --- WEBSOCKET LIVE SEGURO (WSS) ---
   connectLiveWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/live`;
+    let wsUrl;
+    if (window.__APP_CONFIG__ && window.__APP_CONFIG__.wsUrl) {
+      wsUrl = `${window.__APP_CONFIG__.wsUrl}/live`;
+    } else {
+      const isHttps = window.location.protocol === 'https:';
+      const isOfficialDomain = window.location.hostname === 'cp2p.democracias.org';
+      const protocol = (isHttps || isOfficialDomain) ? 'wss:' : 'ws:';
+      wsUrl = `${protocol}//${window.location.host}/live`;
+    }
 
-    this.liveSocket = new WebSocket(wsUrl);
+    console.log('[Comunidade Resiliente] Conectando WebSocket Seguro em:', wsUrl);
+    try {
+      this.liveSocket = new WebSocket(wsUrl);
+    } catch (e) {
+      console.warn('[WebSocket] Falha ao instanciar socket:', e);
+      this.reconnectTimer = setTimeout(() => this.connectLiveWebSocket(), 3000);
+      return;
+    }
 
     this.liveSocket.onopen = () => {
-      console.log('[WhatsApp Desktop P2P] Conectado ao daemon local.');
-      if (this.reconnectTimer) clearInterval(this.reconnectTimer);
+      console.log('[Comunidade Resiliente] Conectado ao daemon via WebSocket seguro.');
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      if (this.dashLiveDot) this.dashLiveDot.className = 'dash-live-dot green';
+      if (this.dashLiveLabel) this.dashLiveLabel.textContent = window.location.protocol === 'https:' ? 'Conexão WSS Segura' : 'Conectado';
     };
 
     this.liveSocket.onmessage = (event) => {
@@ -509,7 +533,14 @@ class AppController {
     };
 
     this.liveSocket.onclose = () => {
+      if (this.dashLiveDot) this.dashLiveDot.className = 'dash-live-dot amber';
+      if (this.dashLiveLabel) this.dashLiveLabel.textContent = 'Reconectando...';
       this.reconnectTimer = setTimeout(() => this.connectLiveWebSocket(), 3000);
+    };
+
+    this.liveSocket.onerror = (err) => {
+      console.warn('[WebSocket Live] Erro de transporte:', err);
+      if (this.dashLiveDot) this.dashLiveDot.className = 'dash-live-dot red';
     };
   }
 

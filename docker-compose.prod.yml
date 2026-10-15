@@ -1,0 +1,125 @@
+version: '3.8'
+
+# ==============================================================================
+# Docker Compose - Implantação de Produção Oficial (cp2p.democracias.org)
+# Exposição Estrita: Apenas portas 80/tcp e 443/tcp via Caddy com TLS Automático
+# ==============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # REVERSE PROXY / TLS EDGE GATEWAY (CADDY)
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3 QUIC
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    depends_on:
+      node-daemon:
+        condition: service_healthy
+      vps-bootstrap-1:
+        condition: service_healthy
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # NÓ DAEMON P2P PRINCIPAL & INTERFACE WEB
+  # ---------------------------------------------------------------------------
+  node-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: ["node", "src/node/p2p_node.js"]
+    environment:
+      - NODE_ENV=production
+      - APP_DOMAIN=cp2p.democracias.org
+      - APP_URL=https://cp2p.democracias.org
+      - PUBLIC_URL=https://cp2p.democracias.org
+      - API_URL=https://cp2p.democracias.org/api
+      - WS_URL=wss://cp2p.democracias.org
+      - BOOTSTRAP_URL=https://cp2p.democracias.org
+      - BOOTSTRAP_WS_URL=wss://cp2p.democracias.org
+      - PUBLIC_BOOTSTRAP_ADDRESS=wss://cp2p.democracias.org
+      - NODE_ID=cp2p-prod-core
+      - HTTP_PORT=5001
+      - P2P_PORT=6001
+      - ROLE=Administrador
+      - DATA_DIR=/data
+      - BOOTSTRAPS=ws://vps-bootstrap-1:4001
+      - AUTO_OPEN=false
+    volumes:
+      - prod_data:/data
+    # Portas NÃO expostas publicamente no host, acessíveis apenas pela rede interna mesh-net
+    expose:
+      - "5001"
+      - "6001"
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5001/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 8s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # VPS BOOTSTRAP, DESCOBERTA E RELAY TRANSPARENTE
+  # ---------------------------------------------------------------------------
+  vps-bootstrap-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: ["node", "src/server/vps_bootstrap.js"]
+    environment:
+      - NODE_ENV=production
+      - APP_DOMAIN=cp2p.democracias.org
+      - PORT=4001
+      - HOST=0.0.0.0
+      - RELAY_RATE_LIMIT=60
+    expose:
+      - "4001"
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 8s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+
+networks:
+  mesh-net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  caddy_logs:
+  prod_data:

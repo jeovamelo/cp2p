@@ -1,0 +1,101 @@
+# ==============================================================================
+# Caddyfile - Configuração de Produção para https://cp2p.democracias.org
+# Comunidade Resiliente - Proxy Reverso com TLS Automático e WebSocket Seguro
+# ==============================================================================
+
+cp2p.democracias.org {
+    # Emissão e Renovação Automática de Certificados TLS (Let's Encrypt / ZeroSSL)
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    # Compressão de Resposta
+    encode gzip zstd
+
+    # Cabeçalhos de Segurança Estritos
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+        Content-Security-Policy "default-src 'self' https://cp2p.democracias.org; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://cp2p.democracias.org wss://cp2p.democracias.org https: wss:; object-src 'none'; frame-ancestors 'none'; base-uri 'self';"
+        # Oculta assinatura de servidor por segurança
+        -Server
+    }
+
+    # Bloqueio de arquivos confidenciais e ocultos (.env, .db, .git)
+    @hiddenFiles {
+        path */.*
+        path *.db*
+        path *.env*
+        path *.log
+    }
+    respond @hiddenFiles 403 {
+        body "Acesso Proibido"
+        close
+    }
+
+    # Roteamento de WebSocket /live e /live/network (Preserva cabeçalhos de upgrade)
+    @websockets {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @websockets {
+        reverse_proxy node-daemon:5001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    # Roteamento de APIs e Health Check
+    handle /api/* {
+        reverse_proxy node-daemon:5001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    handle /health {
+        reverse_proxy node-daemon:5001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    # Roteamento de Bootstrap / Descoberta P2P
+    handle /status {
+        reverse_proxy vps-bootstrap-1:4001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    # Interface Web e Arquivos Estáticos com Cache
+    handle {
+        reverse_proxy node-daemon:5001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    # Logs de Acesso em JSON (Sem registrar payloads privados de mensagens)
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10MB
+            roll_keep 10
+        }
+        format json
+        level INFO
+    }
+}

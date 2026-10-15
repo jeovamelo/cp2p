@@ -2,15 +2,25 @@
   "name": "Comunidade Resiliente",
   "short_name": "Resiliente",
   "description": "Comunidade P2P Descentralizada e Resiliente a Quedas e Censura",
-  "start_url": "/",
+  "id": "https://cp2p.democracias.org/",
+  "start_url": "https://cp2p.democracias.org/",
+  "scope": "https://cp2p.democracias.org/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#0b0f19",
   "theme_color": "#10b981",
   "icons": [
     {
       "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%2310b981'/><path d='M30 50 L45 65 L70 35' stroke='white' stroke-width='8' fill='none'/></svg>",
       "sizes": "192x192",
-      "type": "image/svg+xml"
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%2310b981'/><path d='M30 50 L45 65 L70 35' stroke='white' stroke-width='8' fill='none'/></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
     }
   ]
 }

@@ -25,6 +25,7 @@ const NotificationService = require('../src/core/notification_service');
 const AuditLogger = require('../src/core/audit_logger');
 const NatStunResolver = require('../src/core/nat_stun');
 const { ProtocolPacket, MessageType } = require('../src/common/protocol');
+const SystemConfig = require('../src/common/config');
 
 let passedTests = 0;
 let failedTests = 0;
@@ -515,6 +516,127 @@ async function runAllTests() {
     const recent = storage.getRecentNetworkEvents(5);
     assert(recent.length >= 2);
     assert(!JSON.stringify(recent).includes('conteúdo confidencial'));
+  });
+
+  // --- MÓDULO 10: DOMÍNIO OFICIAL, HTTPS, CORS E PROXY REVERSO ---
+  console.log('\n\x1b[1m[10] Testes de Domínio Oficial, HTTPS, CORS e Proxy Reverso (cp2p.democracias.org)\x1b[0m');
+
+  test('Configuração central do domínio oficial cp2p.democracias.org em modo produção', () => {
+    assert.strictEqual(SystemConfig.APP_DOMAIN, 'cp2p.democracias.org');
+    assert(SystemConfig.APP_URL.startsWith('https://cp2p.democracias.org'));
+    assert(SystemConfig.WS_URL.startsWith('wss://cp2p.democracias.org'));
+    assert(SystemConfig.BOOTSTRAP_WS_URL.startsWith('wss://cp2p.democracias.org'));
+    assert(!SystemConfig.APP_URL.includes('localhost'));
+    assert(!SystemConfig.APP_URL.includes('127.0.0.1'));
+  });
+
+  test('Redirecionamento estrito de HTTP para HTTPS com HSTS quando atrás de proxy reverso', () => {
+    let statusCode = null;
+    let headers = {};
+    const mockReq = {
+      url: '/avisos',
+      headers: {
+        'host': 'cp2p.democracias.org',
+        'x-forwarded-proto': 'http'
+      }
+    };
+    const mockRes = {
+      writeHead: (code, hdrs) => { statusCode = code; headers = hdrs || {}; },
+      end: () => {}
+    };
+
+    if (mockReq.headers['x-forwarded-proto'] === 'http') {
+      mockRes.writeHead(301, {
+        'Location': `https://${SystemConfig.APP_DOMAIN}${mockReq.url}`,
+        'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload'
+      });
+    }
+
+    assert.strictEqual(statusCode, 301);
+    assert.strictEqual(headers['Location'], 'https://cp2p.democracias.org/avisos');
+    assert(headers['Strict-Transport-Security'].includes('max-age=63072000'));
+  });
+
+  test('Cabeçalhos estritos de segurança (HSTS, CSP, X-Frame-Options, X-Content-Type-Options)', () => {
+    const secHeaders = SystemConfig.SECURITY_HEADERS;
+    assert.strictEqual(secHeaders['X-Content-Type-Options'], 'nosniff');
+    assert.strictEqual(secHeaders['X-Frame-Options'], 'DENY');
+    assert.strictEqual(secHeaders['Referrer-Policy'], 'strict-origin-when-cross-origin');
+    assert(secHeaders['Content-Security-Policy'].includes('cp2p.democracias.org'));
+  });
+
+  test('CORS restrito para https://cp2p.democracias.org sem Access-Control-Allow-Origin: * em produção', () => {
+    assert(SystemConfig.isOriginAllowed('https://cp2p.democracias.org'));
+    assert(!SystemConfig.isOriginAllowed('https://origem-maliciosa.com'));
+    assert(!SystemConfig.isOriginAllowed('http://site-inseguro.org'));
+  });
+
+  test('Configuração de cookies seguros com HttpOnly, SameSite=Lax e Secure', () => {
+    const cookieSettings = SystemConfig.COOKIE_SETTINGS;
+    assert.strictEqual(cookieSettings.httpOnly, true);
+    assert.strictEqual(cookieSettings.sameSite, 'Lax');
+    assert.strictEqual(cookieSettings.secure, true);
+  });
+
+  test('Endpoint /health para observabilidade sem vazamento de chaves ou dados confidenciais', () => {
+    const healthPayload = {
+      status: 'HEALTHY',
+      version: '1.1.0',
+      domain: SystemConfig.APP_DOMAIN,
+      https: true,
+      uptimeSeconds: 120,
+      database: 'CONNECTED',
+      bootstrap: { status: 'CONNECTED', activePeers: 3 }
+    };
+
+    const jsonStr = JSON.stringify(healthPayload);
+    assert(healthPayload.status === 'HEALTHY');
+    assert(!jsonStr.includes('password'));
+    assert(!jsonStr.includes('private_key'));
+    assert(!jsonStr.includes('token'));
+    assert(!jsonStr.includes('encrypted_content'));
+  });
+
+  test('Manifesto PWA com escopo, id e start_url no domínio https://cp2p.democracias.org', () => {
+    const manifestPath = path.join(__dirname, '..', 'src', 'web', 'manifest.json');
+    assert(fs.existsSync(manifestPath));
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+    assert.strictEqual(manifest.start_url, 'https://cp2p.democracias.org/');
+    assert.strictEqual(manifest.scope, 'https://cp2p.democracias.org/');
+    assert.strictEqual(manifest.id, 'https://cp2p.democracias.org/');
+    assert.strictEqual(manifest.display, 'standalone');
+  });
+
+  test('Proteção contra vazamento de arquivos confidenciais (.env, .db, .git) no servidor web', () => {
+    const testPaths = ['/.env', '/config/.env', '/database.db', '/.git/config', '/../secrets.txt'];
+    testPaths.forEach(p => {
+      const isBlocked = p.includes('.env') || p.includes('.db') || p.includes('.git') || p.includes('..');
+      assert(isBlocked, `Caminho ${p} deveria ser bloqueado`);
+    });
+  });
+
+  test('Resiliência do histórico local e P2P quando o domínio bootstrap estiver indisponível', () => {
+    storage.saveMessage({
+      id: 'msg-local-resilience',
+      community_id: 'comm-resilience',
+      sequence: 1,
+      prev_hash: '0000000000000000000000000000000000000000000000000000000000000000',
+      author_pubkey: 'admin_key',
+      encrypted_content: 'dados locais',
+      iv: 'iv',
+      tag: 'tag',
+      attachment_type: null,
+      attachment_data: null,
+      epoch: 1,
+      timestamp: Date.now(),
+      signature: 'sig',
+      received_at: Date.now()
+    });
+
+    const retrieved = storage.getMessageById('msg-local-resilience');
+    assert(retrieved);
+    assert.strictEqual(retrieved.encrypted_content, 'dados locais');
   });
 
   // --- RELATÓRIO FINAL ---

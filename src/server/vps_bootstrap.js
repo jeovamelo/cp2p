@@ -8,6 +8,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 const { MessageType, ProtocolPacket } = require('../common/protocol');
+const SystemConfig = require('../common/config');
 
 class VpsBootstrapServer {
   /**
@@ -17,7 +18,7 @@ class VpsBootstrapServer {
    * @param {Array<string>} [options.peerBootstraps] - URLs de outras VPS parceiras
    */
   constructor(options = {}) {
-    this.port = options.port || 4001;
+    this.port = options.port || SystemConfig.VPS_PORT || 4001;
     this.host = options.host || '0.0.0.0';
     this.nodeId = `vps-bootstrap-${this.port}`;
     this.peerBootstraps = options.peerBootstraps || [];
@@ -37,12 +38,64 @@ class VpsBootstrapServer {
   start() {
     return new Promise((resolve, reject) => {
       this.httpServer = http.createServer((req, res) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        const isHttps = req.headers['x-forwarded-proto'] === 'https' || (req.socket && req.socket.encrypted);
+
+        // 1. Redirecionamento HTTP -> HTTPS em Produção
+        if (SystemConfig.isProduction && req.headers['x-forwarded-proto'] === 'http') {
+          const redirectUrl = `https://${SystemConfig.APP_DOMAIN}${req.url}`;
+          res.writeHead(301, {
+            'Location': redirectUrl,
+            'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload'
+          });
+          res.end(`Redirecionando para ${redirectUrl}`);
+          return;
+        }
+
+        // 2. Cabeçalhos de Segurança Estritos
+        for (const [header, value] of Object.entries(SystemConfig.SECURITY_HEADERS)) {
+          res.setHeader(header, value);
+        }
+
+        // 3. CORS Seguro
+        const origin = req.headers.origin;
+        if (origin) {
+          if (SystemConfig.isOriginAllowed(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+            res.setHeader('Access-Control-Allow-Credentials', 'true');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+          } else if (SystemConfig.isProduction) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'CORS_FORBIDDEN' }));
+            return;
+          }
+        } else if (!SystemConfig.isProduction) {
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        }
 
         if (req.method === 'OPTIONS') {
           res.writeHead(204);
           res.end();
+          return;
+        }
+
+        // 4. Endpoint de Saúde (Health Check sem segredos)
+        if (req.url === '/health') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'HEALTHY',
+            version: '1.1.0',
+            domain: SystemConfig.APP_DOMAIN,
+            role: 'BOOTSTRAP_DISCOVERY_RELAY',
+            https: isHttps || SystemConfig.isProduction,
+            uptimeSeconds: Math.floor((Date.now() - this.stats.startedAt) / 1000),
+            activePeers: this.peers.size,
+            relay: {
+              packetsForwarded: this.stats.relayPackets,
+              bytesForwarded: this.stats.relayBytes
+            }
+          }, null, 2));
           return;
         }
 
@@ -51,6 +104,8 @@ class VpsBootstrapServer {
           res.end(JSON.stringify({
             status: 'ONLINE',
             nodeId: this.nodeId,
+            domain: SystemConfig.APP_DOMAIN,
+            https: isHttps || SystemConfig.isProduction,
             role: 'BOOTSTRAP_DISCOVERY_RELAY',
             activePeers: this.peers.size,
             uptimeSeconds: Math.floor((Date.now() - this.stats.startedAt) / 1000),
@@ -69,7 +124,7 @@ class VpsBootstrapServer {
         }
 
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end(`Comunidade Resiliente - VPS Bootstrap Node\nID: ${this.nodeId}\nStatus: ONLINE\nNós Ativos: ${this.peers.size}`);
+        res.end(`Comunidade Resiliente - VPS Bootstrap Node\nID: ${this.nodeId}\nDomínio: ${SystemConfig.APP_DOMAIN}\nStatus: ONLINE\nNós Ativos: ${this.peers.size}`);
       });
 
       this.wss = new WebSocket.Server({ server: this.httpServer });

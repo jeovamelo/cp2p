@@ -120,9 +120,18 @@ Os nós continuarão trocando mensagens através da rede bridge P2P sem qualquer
 
 ---
 
+### 4.6. Implantação em Produção no Domínio Oficial (https://cp2p.democracias.org):
+Para colocar a rede no ar no domínio oficial com TLS automático via Caddy e portas 80/443:
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+Para o passo a passo completo de DNS, liberação de firewall e verificação, consulte o [Guia de Implantação em Produção](docs/production_deployment.md).
+
+---
+
 ## 5. Como Abrir e Operar o Painel "Visão da Comunidade"
 
-1. Acesse qualquer nó ativo no seu navegador (ex: `http://localhost:5001`).
+1. Acesse qualquer nó ativo no seu navegador (ex: `http://localhost:5001` ou `https://cp2p.democracias.org`).
 2. No cabeçalho da aplicação, clique no botão **"🌐 Visão da Rede"** (`#btn-open-network-dashboard`).
 3. O painel interativo exibirá:
    - **Visão Geral:** 14 cartões de indicadores com contagem de nós, celulares, membros e status de consenso;

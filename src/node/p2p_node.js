@@ -16,6 +16,7 @@ const MessageChain = require('../core/crdt_chain');
 const NotificationService = require('../core/notification_service');
 const AuditLogger = require('../core/audit_logger');
 const P2PEngine = require('../core/p2p_engine');
+const SystemConfig = require('../common/config');
 
 class P2PNode {
   /**
@@ -35,8 +36,11 @@ class P2PNode {
     this.nodeId = config.nodeId;
     this.httpPort = config.httpPort;
     this.p2pPort = config.p2pPort;
-    this.bootstrapNodes = config.bootstrapNodes || ['ws://127.0.0.1:4001'];
+    this.bootstrapNodes = config.bootstrapNodes && config.bootstrapNodes.length > 0
+      ? config.bootstrapNodes
+      : SystemConfig.BOOTSTRAP_NODES;
     this.dataDir = config.dataDir || path.join(process.cwd(), 'data', this.nodeId);
+    this.startTime = Date.now();
 
     this.currentUser = null;
     this.activePrivateKeyPem = null;
@@ -268,16 +272,75 @@ class P2PNode {
   }
 
   async handleHttpRequest(req, res) {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    const pathname = url.pathname;
+    const hostHeader = req.headers.host || SystemConfig.APP_DOMAIN || 'localhost';
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || (req.socket && req.socket.encrypted);
 
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    // 1. Redirecionamento HTTP -> HTTPS em Produção
+    if (SystemConfig.isProduction && req.headers['x-forwarded-proto'] === 'http') {
+      const redirectUrl = `https://${SystemConfig.APP_DOMAIN}${req.url}`;
+      res.writeHead(301, {
+        'Location': redirectUrl,
+        'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload'
+      });
+      res.end(`Redirecionando para ${redirectUrl}`);
+      return;
+    }
+
+    // 2. Cabeçalhos de Segurança Estritos (HSTS, CSP, X-Frame-Options, etc.)
+    for (const [header, value] of Object.entries(SystemConfig.SECURITY_HEADERS)) {
+      res.setHeader(header, value);
+    }
+
+    // 3. CORS Seguro
+    const origin = req.headers.origin;
+    if (origin) {
+      if (SystemConfig.isOriginAllowed(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      } else if (SystemConfig.isProduction) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'CORS_FORBIDDEN', message: 'Origem de requisição não autorizada.' }));
+        return;
+      }
+    } else if (!SystemConfig.isProduction) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    }
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
+      return;
+    }
+
+    const url = new URL(req.url, `http://${hostHeader}`);
+    const pathname = url.pathname;
+
+    // 4. Endpoint de Saúde do Sistema (Health Check sem segredos)
+    if (pathname === '/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'HEALTHY',
+        version: '1.1.0',
+        domain: SystemConfig.APP_DOMAIN,
+        https: isHttps || SystemConfig.isProduction,
+        uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
+        database: 'CONNECTED',
+        bootstrap: {
+          status: this.p2p && this.p2p.peers && this.p2p.peers.size > 0 ? 'CONNECTED' : (this.p2p && this.p2p.bootstrapStatus ? this.p2p.bootstrapStatus : 'STANDBY_FALLBACK'),
+          activePeers: this.p2p ? this.p2p.peers.size : 0
+        }
+      }, null, 2));
+      return;
+    }
+
+    // 5. Configuração do Frontend para PWA / Web
+    if (pathname === '/api/config' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(SystemConfig.getFrontendConfig()));
       return;
     }
 
@@ -856,14 +919,19 @@ class P2PNode {
     const webRoot = path.join(__dirname, '..', 'web');
     const fullPath = path.join(webRoot, filePath);
 
-    if (!fullPath.startsWith(webRoot)) {
-      res.writeHead(403);
+    // Proteção contra Path Traversal e vazamento de arquivos confidenciais
+    if (!fullPath.startsWith(webRoot) ||
+        fullPath.includes('.env') ||
+        fullPath.includes('.db') ||
+        fullPath.includes('.git') ||
+        fullPath.includes('..')) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Acesso proibido');
       return;
     }
 
     if (!fs.existsSync(fullPath)) {
-      res.writeHead(404);
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Arquivo não encontrado');
       return;
     }
@@ -880,7 +948,13 @@ class P2PNode {
     };
 
     const contentType = mimeTypes[ext] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType });
+    const isCacheable = ['.css', '.js', '.png', '.jpg', '.svg'].includes(ext) && !filePath.includes('sw.js');
+    const cacheControl = isCacheable ? 'public, max-age=86400' : 'no-cache, no-store, must-revalidate';
+
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': cacheControl
+    });
     fs.createReadStream(fullPath).pipe(res);
   }
 
