@@ -183,6 +183,11 @@
         </div>
 
         <div class="wa-chat-actions">
+          <button class="wa-action-pill highlight" id="btn-open-network-dashboard" title="Visão da Comunidade & Status da Rede P2P">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+            <span id="wa-network-btn-label">Visão da Comunidade (0)</span>
+          </button>
+
           <button class="wa-action-pill" id="btn-open-peers" title="Ver nós conectados na malha">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span id="wa-peers-btn-label">Nós P2P (0)</span>
@@ -500,6 +505,390 @@
           <button class="btn-header" id="btn-submit-register" style="flex: 1; justify-content: center;">
             Criar Nova Conta
           </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 9: VISÃO DA COMUNIDADE & STATUS DA REDE P2P (PROMPT REQUISITO) -->
+  <div class="modal-overlay dash-modal-overlay" id="modal-network-dashboard">
+    <div class="modal-dialog dash-modal-dialog">
+      <div class="modal-header dash-modal-header">
+        <div class="dash-header-title-group">
+          <div class="dash-header-icon">🌐</div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Visão da Comunidade</h3>
+              <span class="dash-role-badge" id="dash-user-role-badge">Membro</span>
+              <span class="pulse-dot online" id="dash-live-dot" title="WebSocket /live/network conectado"></span>
+              <span style="font-size: 0.72rem; color: var(--wa-green); font-weight: 600;" id="dash-live-label">Ao Vivo</span>
+            </div>
+            <p style="font-size: 0.76rem; color: var(--text-muted); margin-top: 2px;">
+              Monitoramento transparente em tempo real da malha P2P, participantes e resiliência (Sem expor dados privados)
+            </p>
+          </div>
+        </div>
+
+        <div class="dash-header-actions">
+          <div class="dash-badge-updated" id="dash-last-updated-badge" title="Timestamp da última telemetria">Atualizado agora</div>
+          <button class="dash-btn-icon" id="dash-btn-refresh" title="Atualizar dados agora">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          </button>
+          <button class="modal-close-btn" data-close="modal-network-dashboard">&times;</button>
+        </div>
+      </div>
+
+      <!-- Abas de Navegação do Painel -->
+      <div class="dash-nav-tabs">
+        <button class="dash-tab-btn active" data-dash-tab="overview">
+          📊 Resumo da Rede
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="topology">
+          🗺️ Mapa da Topologia
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="members">
+          👥 Usuários & Membros
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="nodes">
+          💻 Nós P2P
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="devices">
+          📱 Celulares & Web
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="timeline">
+          ⚡ Linha do Tempo Técnica
+        </button>
+      </div>
+
+      <div class="modal-body dash-modal-body">
+        <!-- ABA 1: RESUMO DA REDE (14 CARTÕES + INDICADORES DE FUNCIONAMENTO) -->
+        <div class="dash-tab-pane active" id="pane-dash-overview">
+          <!-- Banner de Aviso de Privacidade e Permissões -->
+          <div class="dash-privacy-banner" id="dash-privacy-banner">
+            <span class="dash-privacy-icon">🔒</span>
+            <div style="flex: 1;">
+              <strong>Privacidade & Segurança por Design:</strong>
+              <span>Este painel exibe apenas métricas anônimas e agregadas. Endereços IP públicos, localizações, chaves privadas, senhas, tokens de sessão e conteúdos de mensagens <strong>nunca</strong> são expostos.</span>
+            </div>
+            <div id="dash-view-mode-pill" class="dash-view-mode-pill">Modo: Completo (Admin)</div>
+          </div>
+
+          <!-- 14 Cartões de Métricas em Grade Moderna -->
+          <div class="dash-cards-grid">
+            <div class="dash-card">
+              <div class="dash-card-icon desktop">💻</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Desktops Online</span>
+                <span class="dash-card-value" id="card-desktop-online">0</span>
+                <span class="dash-card-sub" id="card-desktop-known">De 0 conhecidos</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon mobile">📱</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Celulares Conectados</span>
+                <span class="dash-card-value" id="card-mobile-connected">0</span>
+                <span class="dash-card-sub">Dispositivos móveis ativos</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon web">🌐</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Páginas Web / PWA</span>
+                <span class="dash-card-value" id="card-web-sessions">0</span>
+                <span class="dash-card-sub">Sessões de leitura ativas</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon members">👥</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Total de Membros</span>
+                <span class="dash-card-value" id="card-total-members">0</span>
+                <span class="dash-card-sub" id="card-members-breakdown">0 Admins • 0 Mods • 0 Membros</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon messages">📨</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Mensagens Sincronizadas</span>
+                <span class="dash-card-value" id="card-sync-messages">0</span>
+                <span class="dash-card-sub">Log auditado imutável</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon vps" id="icon-vps-state">☁️</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Estado da VPS</span>
+                <span class="dash-card-value" id="card-vps-state">ONLINE</span>
+                <span class="dash-card-sub" id="card-vps-sub">Bootstrap & Descoberta</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon p2p" id="icon-p2p-state">🛡️</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Estado da Malha P2P</span>
+                <span class="dash-card-value" id="card-p2p-state">AUTÔNOMA</span>
+                <span class="dash-card-sub" id="card-p2p-sub">Resistente a quedas</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon leader">👑</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Líder Atual (Raft)</span>
+                <span class="dash-card-value" id="card-leader-id">--</span>
+                <span class="dash-card-sub" id="card-leader-term">Termo 1 • Quorum Ativo</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon sync">⏱️</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Última Sincronização</span>
+                <span class="dash-card-value" id="card-last-sync">--:--</span>
+                <span class="dash-card-sub">Cadeia criptográfica em dia</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon direct">⚡</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Conexões Diretas</span>
+                <span class="dash-card-value" id="card-direct-connections">0</span>
+                <span class="dash-card-sub">P2P via STUN / NAT Traversal</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon relay">🔄</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Conexões via Relay</span>
+                <span class="dash-card-value" id="card-relay-connections">0</span>
+                <span class="dash-card-sub">Fallback para NAT restritivo</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon nat">📡</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Tipo de NAT Detectado</span>
+                <span class="dash-card-value" id="card-nat-type" style="font-size: 1rem;">Resolvendo...</span>
+                <span class="dash-card-sub" id="card-nat-sub">RFC 5389 STUN</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Seção de Indicadores de Funcionamento P2P (Prompt Requisito 6) -->
+          <div class="dash-section-box">
+            <h4 class="dash-section-heading">Indicadores de Funcionamento P2P & Consenso</h4>
+            <div class="dash-indicators-grid">
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-vps-dot"></span>
+                <span>VPS Bootstrap: <strong id="ind-vps-text">Online</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-mesh-dot"></span>
+                <span>Nós P2P Online: <strong id="ind-mesh-text">0 conectados</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-dht-dot"></span>
+                <span>Descoberta & PEX: <strong id="ind-dht-text">Ativa</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-relay-dot"></span>
+                <span>Relay Criptografado: <strong id="ind-relay-text">Disponível</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-sync-dot"></span>
+                <span>Sincronização: <strong id="ind-sync-text">100% Atualizada</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-quorum-dot"></span>
+                <span>Quorum de Líder: <strong id="ind-quorum-text">Ativo (Maioria)</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-pending-dot"></span>
+                <span>Mensagens Pendentes: <strong id="ind-pending-text">0</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-reconnect-dot"></span>
+                <span>Reconexão Automática: <strong id="ind-reconnect-text">Monitorando</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-election-dot"></span>
+                <span>Última Eleição: <strong id="ind-election-text">Termo 1 Concluído</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-errors-dot"></span>
+                <span>Erros Recentes: <strong id="ind-errors-text">0 detectados</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 2: MAPA OU DIAGRAMA DA TOPOLOGIA (PROMPT REQUISITO 2) -->
+        <div class="dash-tab-pane" id="pane-dash-topology">
+          <div class="dash-topology-container">
+            <div class="dash-topology-toolbar">
+              <div class="dash-topo-legend">
+                <span class="topo-legend-item"><span class="topo-color-dot green"></span> Conectado Direto (P2P)</span>
+                <span class="topo-legend-item"><span class="topo-color-dot blue"></span> Conectado via Relay</span>
+                <span class="topo-legend-item"><span class="topo-color-dot yellow"></span> Sincronizando</span>
+                <span class="topo-legend-item"><span class="topo-color-dot gray"></span> Desconectado / Offline</span>
+                <span class="topo-legend-item"><span class="topo-color-dot red"></span> Erro / Não Autenticado</span>
+              </div>
+              <div class="dash-topo-actions">
+                <button class="dash-btn-sm" id="btn-recenter-topology">Centralizar Diagrama</button>
+              </div>
+            </div>
+
+            <!-- Canvas/SVG de Topologia Interativo -->
+            <div class="dash-svg-wrapper" id="dash-svg-wrapper">
+              <svg id="dash-topology-svg" width="100%" height="450" viewBox="0 0 800 450">
+                <!-- Desenhado via JavaScript com nós reais -->
+              </svg>
+            </div>
+
+            <!-- Card Flutuante de Detalhes do Nó Clicado -->
+            <div class="dash-node-popover" id="dash-node-popover" style="display: none;">
+              <div class="dash-popover-header">
+                <strong id="popover-node-name">Nó Selecionado</strong>
+                <button class="dash-popover-close" id="btn-close-popover">&times;</button>
+              </div>
+              <div class="dash-popover-body">
+                <div>ID Curto: <span id="popover-node-id" class="font-mono">--</span></div>
+                <div>Papel: <span id="popover-node-role">--</span></div>
+                <div>Método: <span id="popover-node-method">--</span></div>
+                <div>Estado: <span id="popover-node-status">--</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 3: LISTA DE USUÁRIOS DA COMUNIDADE (PROMPT REQUISITO 3) -->
+        <div class="dash-tab-pane" id="pane-dash-members">
+          <!-- Barra de Pesquisa e Filtros -->
+          <div class="dash-filter-bar">
+            <div class="dash-search-box">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+              <input type="text" id="dash-members-search" placeholder="Filtrar por nome de exibição ou apelido...">
+            </div>
+
+            <div class="dash-chips-row">
+              <button class="dash-chip active" data-member-filter="all">Todos</button>
+              <button class="dash-chip" data-member-filter="online">Online</button>
+              <button class="dash-chip" data-member-filter="offline">Offline</button>
+              <button class="dash-chip" data-member-filter="admin">Administradores</button>
+              <button class="dash-chip" data-member-filter="moderator">Moderadores</button>
+              <button class="dash-chip" data-member-filter="member">Membros</button>
+              <button class="dash-chip" data-member-filter="desktop">💻 Desktop</button>
+              <button class="dash-chip" data-member-filter="mobile">📱 Celular</button>
+              <button class="dash-chip" data-member-filter="web">🌐 Web</button>
+            </div>
+          </div>
+
+          <!-- Tabela de Membros -->
+          <div class="dash-table-wrapper">
+            <table class="dash-table" id="dash-members-table">
+              <thead>
+                <tr>
+                  <th>Membro / Usuário</th>
+                  <th>Papel</th>
+                  <th>Estado</th>
+                  <th>Dispositivo</th>
+                  <th>Última Atividade</th>
+                  <th>Sincronização</th>
+                  <th>Dispositivos Ativos</th>
+                </tr>
+              </thead>
+              <tbody id="dash-members-tbody">
+                <!-- Preenchido via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ABA 4: LISTA DE NÓS P2P (PROMPT REQUISITO 4) -->
+        <div class="dash-tab-pane" id="pane-dash-nodes">
+          <div class="dash-table-wrapper">
+            <table class="dash-table" id="dash-nodes-table">
+              <thead>
+                <tr>
+                  <th>Nó / Nome Amigável</th>
+                  <th>ID Curto</th>
+                  <th>Papel</th>
+                  <th>Estado</th>
+                  <th>Conexão</th>
+                  <th>Último Heartbeat</th>
+                  <th>Última Sincronização</th>
+                  <th>Mensagens Conhecidas</th>
+                  <th>Protocolo</th>
+                  <th>Tempo Conectado</th>
+                </tr>
+              </thead>
+              <tbody id="dash-nodes-tbody">
+                <!-- Preenchido via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ABA 5: DISPOSITIVOS MÓVEIS & PÁGINAS WEB (PROMPT REQUISITO 5) -->
+        <div class="dash-tab-pane" id="pane-dash-devices">
+          <div class="dash-devices-grid">
+            <div class="dash-device-card">
+              <div class="dash-device-icon mobile">📱</div>
+              <h4>Celulares na Comunidade</h4>
+              <div class="dash-device-metric" id="dev-mobile-active">0 Conectados</div>
+              <p class="dash-device-desc">Celulares sincronizados recentemente via PWA ou aplicativo com notificações push seguras.</p>
+              <div class="dash-device-stats">
+                <div>Notificações Web Push: <strong id="dev-push-status">VAPID Ativo</strong></div>
+                <div>Tokens Registrados: <strong id="dev-push-subs-count">0</strong></div>
+              </div>
+            </div>
+
+            <div class="dash-device-card">
+              <div class="dash-device-icon web">🌐</div>
+              <h4>Páginas Web / PWA Abertas</h4>
+              <div class="dash-device-metric" id="dev-web-active">0 Sessões</div>
+              <p class="dash-device-desc">Navegadores ativos recebendo comunicados oficiais transmitidos pelo nó desktop local.</p>
+              <div class="dash-device-stats">
+                <div>Sessões Locais Ativas: <strong id="dev-sessions-count">0</strong></div>
+                <div>Cache Offline: <strong id="dev-cache-status">ServiceWorker Ativo</strong></div>
+              </div>
+            </div>
+
+            <div class="dash-device-card">
+              <div class="dash-device-icon desktop">💻</div>
+              <h4>Nós Desktop (Backbone)</h4>
+              <div class="dash-device-metric" id="dev-desktop-active">0 Nós</div>
+              <p class="dash-device-desc">Computadores pessoais que armazenam e replicam o histórico criptográfico da comunidade.</p>
+              <div class="dash-device-stats">
+                <div>Banco SQLite: <strong>WAL & Migrado</strong></div>
+                <div>Integridade: <strong>100% Causal Hash Chain</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 6: LINHA DO TEMPO TÉCNICA (PROMPT REQUISITO 6) -->
+        <div class="dash-tab-pane" id="pane-dash-timeline">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
+              Eventos técnicos da infraestrutura P2P em tempo real. Zero conteúdo de mensagens privadas é registrado.
+            </p>
+            <span class="dash-tag live">Transmissão em Tempo Real</span>
+          </div>
+
+          <div class="dash-timeline-feed" id="dash-timeline-feed">
+            <!-- Preenchido via JS -->
+          </div>
         </div>
       </div>
     </div>

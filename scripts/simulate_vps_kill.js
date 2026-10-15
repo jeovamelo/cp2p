@@ -53,10 +53,15 @@ async function runSimulation() {
     // ---------------------------------------------------------
     // PASSO 1: Iniciar VPS de Bootstrap e Relay Inicial
     // ---------------------------------------------------------
-    console.log(`${c.bold}[PASSO 1] Iniciando VPS de Bootstrap e Descoberta Inicial (Porta 4001)...${c.reset}`);
-    vps = new VpsBootstrapServer({ port: 4001 });
+    const vpsPort = parseInt(process.env.SIM_VPS_PORT || '4901', 10);
+    const aliceHttp = 5901, aliceP2p = 6901;
+    const bobHttp = 5902, bobP2p = 6902;
+    const carlosHttp = 5903, carlosP2p = 6903;
+
+    console.log(`${c.bold}[PASSO 1] Iniciando VPS de Bootstrap e Descoberta Inicial (Porta ${vpsPort})...${c.reset}`);
+    vps = new VpsBootstrapServer({ port: vpsPort });
     await vps.start();
-    console.log(`${c.green}✓ VPS Bootstrap iniciada com sucesso na porta 4001.${c.reset}\n`);
+    console.log(`${c.green}✓ VPS Bootstrap iniciada com sucesso na porta ${vpsPort}.${c.reset}\n`);
 
     // ---------------------------------------------------------
     // PASSO 2: Iniciar 3 Nós P2P Independentes
@@ -68,47 +73,47 @@ async function runSimulation() {
 
     node1 = new P2PNode({
       nodeId: 'node-alice-admin',
-      httpPort: 5001,
-      p2pPort: 6001,
+      httpPort: aliceHttp,
+      p2pPort: aliceP2p,
       role: 'Administrador',
       username: 'alice_admin',
       channelKey: initialChannelKey,
       dataDir: path.join(testDir, 'alice'),
-      bootstrapNodes: ['ws://127.0.0.1:4001']
+      bootstrapNodes: [`ws://127.0.0.1:${vpsPort}`]
     });
     await node1.start();
     const alicePubkey = node1.currentUser.public_key;
-    console.log(`  ${c.green}✓ Nó 1 [Alice - Administradora] ativo (HTTP: 5001, P2P: 6001)${c.reset}`);
+    console.log(`  ${c.green}✓ Nó 1 [Alice - Administradora] ativo (HTTP: ${aliceHttp}, P2P: ${aliceP2p})${c.reset}`);
 
     // Nó 2: Membro Bob (onboarding com convite contendo a chave gênesis de Alice e a chave do canal)
     node2 = new P2PNode({
       nodeId: 'node-bob-membro',
-      httpPort: 5002,
-      p2pPort: 6002,
+      httpPort: bobHttp,
+      p2pPort: bobP2p,
       role: 'Membro',
       username: 'bob_membro',
       genesisAdminPubkey: alicePubkey,
       channelKey: initialChannelKey,
       dataDir: path.join(testDir, 'bob'),
-      bootstrapNodes: ['ws://127.0.0.1:4001']
+      bootstrapNodes: [`ws://127.0.0.1:${vpsPort}`]
     });
     await node2.start();
-    console.log(`  ${c.green}✓ Nó 2 [Bob - Membro] ativo (HTTP: 5002, P2P: 6002)${c.reset}`);
+    console.log(`  ${c.green}✓ Nó 2 [Bob - Membro] ativo (HTTP: ${bobHttp}, P2P: ${bobP2p})${c.reset}`);
 
     // Nó 3: Membro Carlos (onboarding similar)
     node3 = new P2PNode({
       nodeId: 'node-carlos-membro',
-      httpPort: 5003,
-      p2pPort: 6003,
+      httpPort: carlosHttp,
+      p2pPort: carlosP2p,
       role: 'Membro',
       username: 'carlos_membro',
       genesisAdminPubkey: alicePubkey,
       channelKey: initialChannelKey,
       dataDir: path.join(testDir, 'carlos'),
-      bootstrapNodes: ['ws://127.0.0.1:4001']
+      bootstrapNodes: [`ws://127.0.0.1:${vpsPort}`]
     });
     await node3.start();
-    console.log(`  ${c.green}✓ Nó 3 [Carlos - Membro] ativo (HTTP: 5003, P2P: 6003)${c.reset}\n`);
+    console.log(`  ${c.green}✓ Nó 3 [Carlos - Membro] ativo (HTTP: ${carlosHttp}, P2P: ${carlosP2p})${c.reset}\n`);
 
     // Aguarda sincronização PEX inicial (descoberta de malha direta)
     console.log(`${c.yellow}Aguardando descoberta e estabelecimento da malha P2P direta entre os nós (3 segundos)...${c.reset}`);

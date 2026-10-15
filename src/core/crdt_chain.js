@@ -166,7 +166,38 @@ class MessageChain {
       this.orphanBuffer.set(message.id, message);
       return { success: true, reason: 'BUFFERED_ORPHAN', needsSync: true, expectedSequence };
     } else {
-      // Mensagem com sequência menor que a esperada mas ID novo (tentativa de reordenação ilegal)
+      // Mensagem com sequência já existente: possível partição de rede (split-brain)
+      const existingAtSeq = this.storage.getMessageBySequence(message.community_id, message.sequence);
+      if (existingAtSeq && existingAtSeq.id !== message.id) {
+        // Regra determinística de desempate de partição:
+        // 1. Mensagem criada com menor timestamp (mais antiga no tempo real)
+        // 2. Desempate lexicográfico pelo hash SHA-256
+        const incomingWins = (message.timestamp < existingAtSeq.timestamp) ||
+          (message.timestamp === existingAtSeq.timestamp && message.id < existingAtSeq.id);
+
+        if (incomingWins) {
+          console.warn(`[Cadeia] Conflito de partição resolvido: Mensagem ${message.id} substitui ${existingAtSeq.id} na sequência #${message.sequence}`);
+          // Remove a mensagem sobreposta antes de salvar o vencedor da reconciliação
+          this.storage.deleteMessageById(existingAtSeq.id);
+          this.storage.appendAuditLog('SPLIT_BRAIN_CONFLICT_RESOLVED', message.author_pubkey, {
+            sequence: message.sequence,
+            winnerId: message.id,
+            supersededId: existingAtSeq.id
+          });
+          message.received_at = Date.now();
+          this.storage.saveMessage(message);
+          return { success: true, reason: 'PARTITION_RECONCILED' };
+        } else {
+          console.warn(`[Cadeia] Conflito de partição: Mensagem existente ${existingAtSeq.id} prevalece sobre ${message.id}`);
+          this.storage.appendAuditLog('SPLIT_BRAIN_CONFLICT_REJECTED', message.author_pubkey, {
+            sequence: message.sequence,
+            retainedId: existingAtSeq.id,
+            rejectedId: message.id
+          });
+          return { success: false, reason: 'PARTITION_CONFLICT_SUPERSEDED' };
+        }
+      }
+
       return { success: false, reason: 'OBSOLETE_OR_CONFLICTING_SEQUENCE' };
     }
   }

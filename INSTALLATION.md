@@ -1,145 +1,135 @@
-# Manual de Instalação e Uso: Comunidade Resiliente
+# Manual de Instalação e Operação: Comunidade Resiliente 🛠️📖
 
-Bem-vindo ao **Comunidade Resiliente**, uma plataforma descentralizada P2P de comunicação comunitária desenhada para continuar operando mesmo se servidores centrais ou VPSs forem completamente desligados ou bloqueados.
+> **Guia Completo para Usuários, Operadores de Nós e Desenvolvedores**
+
+Bem-vindo ao **Comunidade Resiliente**, uma plataforma descentralizada P2P de comunicação comunitária desenhada para manter a conectividade e a integridade de canais de mensagens mesmo diante da indisponibilidade ou bloqueio de servidores centrais e VPSs.
 
 ---
 
 ## 1. Requisitos de Sistema
 
-- **Sistema Operacional:** Windows 10/11, macOS (Intel ou Apple Silicon) ou Linux (Ubuntu, Debian, Fedora, Arch, etc.).
-- **Ambiente de Execução:** Node.js v22.5.0 ou superior (já inclui motor nativo SQLite).
+- **Sistema Operacional:** Windows 10/11, macOS 12+ (Intel ou Apple Silicon) ou Linux (Ubuntu 20.04+, Debian 11+, Fedora, Arch).
+- **Ambiente de Execução:** Node.js v22.5.0 ou superior (inclui motor nativo `node:sqlite`).
 - **Navegador Web:** Google Chrome, Brave, Microsoft Edge, Firefox ou Safari (com suporte a PWA e WebSockets).
-- **Opcional:** Docker e Docker Compose (para implantação conteinerizada).
+- **Opcional:** Docker Engine v24+ e Docker Compose v2.20+ (para implantação conteinerizada).
 
 ---
 
-## 2. Instalação com 1 Clique (Para Usuários Leigos / Sem Terminal)
+## 2. Instalação em 1 Clique (Para Usuários Finais / Sem Terminal)
 
-Para disponibilizar o sistema para pessoas comuns sem necessidade de conhecimento técnico:
+Para disponibilizar o nó desktop a membros da comunidade sem exigir familiaridade com linha de comando:
 
-### 🪟 No Windows (Recomendado):
-1. Baixe ou descompacte a pasta do projeto.
-2. Dê um **duplo-clique no arquivo `INSTALAR-WINDOWS.bat`**.
-3. O instalador cuidará de tudo automaticamente:
-   - Configura os arquivos em `%LocalAppData%\ComunidadeResiliente`.
-   - Detecta o Node.js ou baixa o motor autônomo portátil se necessário.
-   - Cria o atalho **"Comunidade Resiliente"** diretamente na sua **Área de Trabalho**.
-   - Adiciona a aplicação ao **Menu Iniciar** do Windows.
-   - Cria o **Desinstalador** automático.
-   - Inicia o nó P2P em segundo plano (sem janela preta de prompt) e abre o navegador automaticamente!
+### 🪟 No Windows:
+1. Extraia os arquivos da comunidade em uma pasta do seu computador.
+2. Dê um **duplo-clique no arquivo `INSTALAR-WINDOWS.bat`** na raiz da pasta.
+3. O script configura o ambiente automaticamente:
+   - Instala a aplicação em `%LocalAppData%\ComunidadeResiliente`;
+   - Cria o atalho executável **"Comunidade Resiliente"** na **Área de Trabalho**;
+   - Registra o atalho no **Menu Iniciar** do Windows;
+   - Cria o script de desinstalação automática;
+   - Inicializa o nó em segundo plano e abre a interface no seu navegador padrão.
 
 ### 🐧 No Linux ou 🍎 macOS:
-Abra o terminal na pasta e execute:
+Abra o terminal na pasta do projeto e execute:
 ```bash
+chmod +x install.sh
 ./install.sh
 ```
-O atalho `.desktop` será criado automaticamente no seu menu de aplicativos.
+O atalho `.desktop` ou inicializador do sistema será registrado no seu menu de aplicativos.
 
 ---
 
-## 3. Instalação Manual para Desenvolvedores
+## 3. Configuração de Variáveis de Ambiente (`.env`)
 
-### 3.1. Clonar ou Baixar o Repositório
+Copie o arquivo de exemplo para criar seu arquivo de configuração local:
 ```bash
-git clone https://github.com/seu-usuario/comunidade-resiliente.git
-cd comunidade-resiliente
+cp .env.example .env
 ```
 
-### 3.2. Instalar as Dependências
+### Principais Parâmetros Configuráveis:
+| Variável | Padrão | Descrição |
+| :--- | :--- | :--- |
+| `NODE_ENV` | `production` | Ambiente de execução (`development` ou `production`) |
+| `HTTP_PORT` | `5001` | Porta do servidor web local / dashboard |
+| `P2P_PORT` | `6001` | Porta TCP/WebSocket para conexões diretas entre nós |
+| `BOOTSTRAP_NODES` | `ws://127.0.0.1:4001,ws://127.0.0.1:4002` | Lista de servidores de bootstrap separados por vírgula |
+| `STUN_SERVERS` | `stun.l.google.com:19302,stun.cloudflare.com:3478` | Servidores STUN UDP RFC 5389 para IP reflexivo |
+| `DB_PATH` | `./data/community.db` | Caminho do arquivo SQLite com modo WAL |
+| `ROLE` | `Membro` | Papel do usuário local (`Administrador`, `Moderador`, `Membro`) |
+| `RELAY_ENABLED` | `true` | Ativa encaminhamento transparente como nó relay |
+| `RELAY_RATE_LIMIT` | `60` | Limite máximo de pacotes por segundo encaminhados |
+
+---
+
+## 4. Modos de Execução para Desenvolvedores e Administradores
+
+### 4.1. Instalação das Dependências:
 ```bash
 npm install
 ```
 
-## 3. Modos de Execução
-
-### Modo A: Executar o Cluster de Demonstração (Recomendado para Testes)
-Inicia automaticamente 1 Servidor Bootstrap (VPS) e 3 Nós P2P locais em portas isoladas:
-- **VPS Bootstrap:** porta `4001`
-- **Nó Alice (Administradora):** `http://localhost:5001` (P2P: `6001`)
-- **Nó Bob (Moderador):** `http://localhost:5002` (P2P: `6002`)
-- **Nó Carlos (Membro):** `http://localhost:5003` (P2P: `6003`)
-
-Execute no terminal:
-```bash
-npm run cluster
-```
-O navegador abrirá automaticamente em `http://localhost:5001`.
-
----
-
-### Modo B: Simulação Automática de Queda da VPS (Failover Test)
-Demonstra em tempo real a resiliência do sistema:
-1. Inicia a VPS e 3 nós.
-2. Publica comunicado oficial com VPS ativa.
-3. **Desliga abruptamente a VPS central.**
-4. Os nós remanescentes elegem um novo líder descentralizado.
-5. Publica um novo comunicado de emergência com a VPS 100% morta.
-6. Todos os nós recebem, decifram e validam a mensagem via P2P direta.
-
-Para rodar a simulação:
-```bash
-npm run simulate:kill
-```
-
----
-
-### Modo C: Executar Apenas o Seu Nó Desktop Pessoal
-Para rodar no seu computador conectando a uma comunidade existente:
-```bash
-# Como Membro Comum:
-npm start
-
-# Ou especificando seu papel e porta:
-HTTP_PORT=5001 P2P_PORT=6001 ROLE=Administrador npm start
-```
-No Windows PowerShell:
-```powershell
-$env:HTTP_PORT="5001"; $env:P2P_PORT="6001"; $env:ROLE="Administrador"; npm start
-```
-
----
-
-### Modo D: Execução com Docker Compose
-Para subir o ambiente completo em contêineres isolados:
-```bash
-docker compose up --build
-```
-Acesse a interface de Alice em `http://localhost:5001`, Bob em `http://localhost:5002` e Carlos em `http://localhost:5003`.
-
----
-
-## 4. Guia de Uso da Interface Web / PWA
-
-### 4.1. Publicando Comunicados (Apenas Administradores)
-1. Acesse `http://localhost:5001` (Nó da Administradora Alice).
-2. Na parte inferior, observe a barra de composição ativa.
-3. Digite o comunicado desejado.
-4. (Opcional) Clique em **"Anexar Imagem"** para carregar uma imagem ou foto.
-5. Clique em **"Publicar Comunicado Assinado"**.
-6. A mensagem é assinada com sua chave privada Ed25519, cifrada com AES-256-GCM e disseminada na malha P2P.
-
-### 4.2. Leitura por Membros e Moderadores
-1. Abra uma nova aba anônima ou navegador em `http://localhost:5002` (Bob) ou `http://localhost:5003` (Carlos).
-2. Observe que a barra de envio de mensagens é bloqueada: *"Canal Oficial Unidirecional: Apenas administradores com chave privada autorizada podem publicar"*.
-3. O comunicado enviado por Alice aparece instantaneamente na tela, com selo de verificação criptográfica.
-
-### 4.3. Teste Manual de Queda da VPS
-1. No terminal do cluster ou no container da VPS, encerre o processo com `CTRL+C` ou pare o container `vps-bootstrap`.
-2. No navegador, o indicador no topo mudará para `VPS: Offline` e um alerta amarelo surgirá informando a ativação da malha autônoma.
-3. Na interface da Administradora, envie uma nova mensagem.
-4. Vá para a aba do Membro: **a mensagem chegará normalmente**, transmitida diretamente de nó para nó através da malha P2P!
-
-### 4.4. Instalando como PWA no Celular ou Desktop
-1. No Google Chrome ou Edge, clique no ícone de computador/celular na barra de endereços: **"Instalar Comunidade Resiliente"**.
-2. No celular (Android/iOS), clique em **"Compartilhar"** > **"Adicionar à Tela de Início"**.
-3. O aplicativo funcionará em janela própria e receberá notificações locais.
-
----
-
-## 5. Testes Automatizados Unitários e de Integração
-
-Para executar a bateria de testes criptográficos, banco SQLite, consistência de DAG e eleição:
+### 4.2. Executar a Suíte de Testes Automatizados (27 Testes):
 ```bash
 npm test
 ```
-Todos os 16 testes devem passar com `0` falhas.
+Verifica a integridade criptográfica (Ed25519, AES-GCM, PBKDF2), migrações SQLite, reconciliação CRDT de split-brain, consenso Raft-lite, Web Push VAPID e privacidade do painel visual.
+
+---
+
+### 4.3. Simulação Automatizada de Queda da VPS:
+```bash
+npm run simulate:kill
+```
+Demonstra a resiliência em tempo real:
+1. Inicia uma VPS de bootstrap e 3 nós em portas isoladas (Alice Admin, Bob Moderador, Carlos Membro);
+2. Alice publica o Comunicado #1 enquanto a VPS está ativa;
+3. **A VPS central é abruptamente encerrada e desligada;**
+4. Os 3 nós detectam a queda e recuperam a lista de pares pelo cache local SQLite;
+5. Elegem autonomamente a nova liderança do termo Raft-lite;
+6. Alice publica o Comunicado #2 de emergência com a VPS **completamente desligada**;
+7. Todos os nós recebem e decifram a mensagem via malha direta P2P;
+8. Valida a rejeição estrita de mensagens forjadas por não-administradores e rotação de chave.
+
+---
+
+### 4.4. Execução em Cluster Local de Demonstração:
+```bash
+npm run cluster
+```
+Inicia o ambiente completo com interface gráfica:
+- **VPS Bootstrap 1:** `http://localhost:4001/status` (WS: `ws://127.0.0.1:4001`)
+- **Nó Alice (Administradora):** `http://localhost:5001` *(publicação autorizada)*
+- **Nó Bob (Moderador):** `http://localhost:5002` *(somente leitura e moderação)*
+- **Nó Carlos (Membro):** `http://localhost:5003` *(somente leitura e replicação)*
+
+---
+
+### 4.5. Execução Conteinerizada via Docker Compose (Multi-Bootstrap):
+```bash
+docker compose up --build
+```
+O arquivo [`docker-compose.yml`](docker-compose.yml) inicializa:
+- Duas instâncias de VPS Bootstrap redundantes (`vps-bootstrap-1` na 4001 e `vps-bootstrap-2` na 4002);
+- 3 nós desktop com volumes de dados persistentes (`alice_data`, `bob_data`, `carlos_data`), healthchecks e limites de recursos (0.5 CPU, 256MB RAM).
+
+Para simular a queda total dos servidores na nuvem:
+```bash
+docker compose stop vps-bootstrap-1 vps-bootstrap-2
+```
+Os nós continuarão trocando mensagens através da rede bridge P2P sem qualquer interrupção.
+
+---
+
+## 5. Como Abrir e Operar o Painel "Visão da Comunidade"
+
+1. Acesse qualquer nó ativo no seu navegador (ex: `http://localhost:5001`).
+2. No cabeçalho da aplicação, clique no botão **"🌐 Visão da Rede"** (`#btn-open-network-dashboard`).
+3. O painel interativo exibirá:
+   - **Visão Geral:** 14 cartões de indicadores com contagem de nós, celulares, membros e status de consenso;
+   - **Mapa da Rede:** Gráfico topológico vetorial SVG com código de cores (Verde: Direto, Azul: Relay, Cinza: Offline);
+   - **Tabela de Membros:** Lista com papéis e status, respeitando as permissões do usuário logado;
+   - **Nós P2P:** Lista de computadores participantes, protocolo, latência e método de conexão;
+   - **Dispositivos:** Sessões ativas de Desktop, Celular e Web;
+   - **Linha do Tempo:** Registro de eventos técnicos em tempo real via WebSocket `/live/network`.
+
+Para mais detalhes sobre as regras de anonimização e cálculo dos indicadores, consulte [`docs/network_dashboard.md`](docs/network_dashboard.md).

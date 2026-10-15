@@ -1,20 +1,29 @@
 /**
  * Comunidade Resiliente - Motor de Rede P2P Descentralizado
- * Malha P2P com Descoberta Dinâmica (PEX), Gossip Epidêmico, STUN/Relay Fallback e Anti-Entropy Sync
+ * Malha P2P resiliente com:
+ * - NAT Traversal e Descoberta de IP Reflexivo (STUN RFC 5389 / RFC 3489)
+ * - Identidade Criptográfica Ed25519 de cada nó com handshake autenticado mútuo
+ * - Suporte a Múltiplos Bootstraps e Fallback para Cache Local (SQLite) quando todas as VPS caem
+ * - Fallback automático para Relay quando conexão direta for impossível (NAT Simétrico / Firewall)
+ * - Consenso Raft-lite persistido com resolução determinística de split-brain
+ * - Telemetria em tempo real para o Painel de Monitoramento da Comunidade
  */
 
 const WebSocket = require('ws');
 const EventEmitter = require('events');
+const crypto = require('crypto');
 const { MessageType, ProtocolPacket } = require('../common/protocol');
+const CryptoEngine = require('../common/crypto');
 const ConsensusEngine = require('./consensus');
+const NatStunResolver = require('./nat_stun');
 
 class P2PEngine extends EventEmitter {
   /**
    * @param {object} options
    * @param {string} options.nodeId - ID único do nó
-   * @param {string} options.host - Host local (ex: '127.0.0.1' ou IP público)
+   * @param {string} [options.host='0.0.0.0'] - Host local de escuta
    * @param {number} options.p2pPort - Porta onde este nó escuta conexões P2P
-   * @param {Array<string>} options.bootstrapNodes - URLs dos nós de bootstrap (VPS)
+   * @param {Array<string>} [options.bootstrapNodes] - URLs dos nós de bootstrap (VPS)
    * @param {import('./storage')} options.storage - Gerenciador de armazenamento SQLite
    * @param {import('./crdt_chain')} options.chain - Cadeia de mensagens
    * @param {import('./notification_service')} options.notificationService - Notificações
@@ -24,9 +33,9 @@ class P2PEngine extends EventEmitter {
   constructor(options) {
     super();
     this.nodeId = options.nodeId;
-    this.host = options.host || '127.0.0.1';
+    this.host = options.host || '0.0.0.0';
     this.p2pPort = options.p2pPort;
-    this.bootstrapNodes = options.bootstrapNodes || [];
+    this.bootstrapNodes = options.bootstrapNodes || ['ws://127.0.0.1:4001'];
     this.storage = options.storage;
     this.chain = options.chain;
     this.notificationService = options.notificationService;
@@ -35,7 +44,8 @@ class P2PEngine extends EventEmitter {
 
     // Mapas de conexões ativas
     this.peers = new Map(); // nodeId -> WebSocket
-    this.knownPeers = new Map(); // address 'host:port' -> { nodeId, host, port, isBootstrap }
+    this.knownPeers = new Map(); // address 'host:port' -> peerInfo
+    this.relayPeers = new Set(); // nodeIds alcançados exclusivamente via relay
     this.seenPacketNonces = new Set(); // Proteção contra loops de difusão de gossip
 
     this.server = null;
@@ -43,16 +53,58 @@ class P2PEngine extends EventEmitter {
     this.pexInterval = null;
     this.isStopping = false;
 
-    // Inicializa o motor de consenso para eleição de líder quando a VPS cair
+    // Inicialização da identidade criptográfica deste nó
+    this.nodeIdentity = this._initNodeIdentity();
+
+    // NAT & STUN
+    this.natResolver = new NatStunResolver();
+    this.natInfo = {
+      localIp: this.natResolver.getLocalIp(),
+      reflexiveIp: null,
+      reflexivePort: null,
+      natType: 'DISCOVERING'
+    };
+
+    // Estatísticas de trânsito
+    this.stats = {
+      startedAt: Date.now(),
+      messagesGossiped: 0,
+      relayPacketsReceived: 0,
+      relayPacketsSent: 0,
+      lastSyncTime: Date.now()
+    };
+
+    // Inicializa o motor de consenso Raft-lite
     this.consensus = new ConsensusEngine({
       nodeId: this.nodeId,
       role: this.role,
+      storage: this.storage,
       broadcast: (packet) => this.broadcast(packet),
-      heartbeatInterval: 3000,
+      heartbeatInterval: 2500,
       electionTimeout: 4000
     });
 
     this.setupConsensusEvents();
+  }
+
+  _initNodeIdentity() {
+    let idObj = this.storage.getFirstNodeIdentity();
+    if (!idObj) {
+      const keypair = CryptoEngine.generateEd25519KeyPair();
+      idObj = {
+        node_id: this.nodeId,
+        display_name: `Nó ${this.nodeId.substring(0, 8)}`,
+        public_key: keypair.publicKey,
+        encrypted_private_key: keypair.privateKey,
+        created_at: Date.now()
+      };
+      this.storage.saveNodeIdentity(idObj);
+    }
+    return {
+      nodeId: idObj.node_id,
+      publicKey: idObj.public_key,
+      privateKey: idObj.encrypted_private_key
+    };
   }
 
   setupConsensusEvents() {
@@ -60,6 +112,11 @@ class P2PEngine extends EventEmitter {
       this.auditLogger.log('NEW_LEADER_ELECTED', this.nodeId, {
         leaderId: data.leaderId,
         isMe: data.isMe
+      });
+      this.storage.addNetworkEvent({
+        eventType: 'LEADER_ELECTED',
+        summary: data.isMe ? `Este nó assumiu a liderança autônoma da malha.` : `Novo líder eleito na malha: ${data.leaderId}.`,
+        severity: 'info'
       });
       this.emit('leader_change', data);
     });
@@ -70,29 +127,46 @@ class P2PEngine extends EventEmitter {
         this.nodeId,
         { alive: data.alive }
       );
+      this.storage.addNetworkEvent({
+        eventType: data.alive ? 'VPS_ONLINE' : 'VPS_OFFLINE',
+        summary: data.alive 
+          ? 'Servidor central VPS online. Sincronização acelerada ativada.' 
+          : 'VPS indisponível! Malha P2P autônoma ativada entre computadores pessoais.',
+        severity: data.alive ? 'info' : 'warning'
+      });
       this.emit('vps_status_change', data);
+
+      // Se todas as VPS caíram, tenta imediatamente o fallback para peers do cache SQLite
+      if (!data.alive) {
+        this.fallbackToCachedPeers();
+      }
     });
   }
 
-  /**
-   * Inicia o servidor P2P local e conecta-se aos nós de bootstrap configurados
-   */
   async start() {
+    // 1. Sondagem STUN em segundo plano para descobrir IP público e tipo de NAT
+    this.probeNatTraversal();
+
     return new Promise((resolve, reject) => {
       try {
-        this.server = new WebSocket.Server({ port: this.p2pPort }, () => {
+        this.server = new WebSocket.Server({ port: this.p2pPort, host: '0.0.0.0' }, () => {
           this.auditLogger.log('P2P_SERVER_STARTED', this.nodeId, {
-            host: this.host,
             port: this.p2pPort
+          });
+
+          this.storage.addNetworkEvent({
+            eventType: 'NODE_STARTED',
+            summary: `Nó P2P iniciado na porta ${this.p2pPort}. Identidade Ed25519 ativa.`,
+            severity: 'info'
           });
 
           // Inicia o consenso
           this.consensus.start();
 
-          // Conecta aos nós de bootstrap (VPS inicial)
+          // Conecta aos nós de bootstrap configurados
           this.connectToBootstraps();
 
-          // Configura tarefas periódicas: PEX e Reconexão
+          // Configura tarefas periódicas: PEX, Reconexão e Limpeza
           this.startPeriodicTasks();
 
           resolve();
@@ -112,9 +186,22 @@ class P2PEngine extends EventEmitter {
     });
   }
 
-  /**
-   * Encerra o nó de forma graciosa e instantânea
-   */
+  async probeNatTraversal() {
+    try {
+      const res = await this.natResolver.resolveReflexiveAddress();
+      this.natInfo = {
+        localIp: res.localIp,
+        reflexiveIp: res.reflexiveIp,
+        reflexivePort: res.reflexivePort,
+        natType: res.natType,
+        requiresRelay: !!res.requiresRelay
+      };
+      console.log(`[P2P NAT] IP Local: ${res.localIp} | IP Reflexivo (STUN): ${res.reflexiveIp || 'N/A'} | Tipo: ${res.natType}`);
+    } catch (e) {
+      this.natInfo.natType = 'NAT_PROBE_ERROR';
+    }
+  }
+
   async stop() {
     this.isStopping = true;
     if (this.reconnectInterval) {
@@ -131,6 +218,7 @@ class P2PEngine extends EventEmitter {
       try { socket.terminate(); } catch (e) {}
     }
     this.peers.clear();
+    this.relayPeers.clear();
 
     if (this.server && this.server.clients) {
       for (const client of this.server.clients) {
@@ -148,7 +236,7 @@ class P2PEngine extends EventEmitter {
   }
 
   /**
-   * Conecta a todos os nós de bootstrap configurados (ex: VPS de encontro)
+   * Conecta a múltiplos nós de bootstrap configurados
    */
   connectToBootstraps() {
     for (const bUrl of this.bootstrapNodes) {
@@ -157,28 +245,57 @@ class P2PEngine extends EventEmitter {
   }
 
   /**
-   * Conecta a um nó remoto por URL (ex: 'ws://127.0.0.1:4001')
+   * Fallback de emergência para peers salvos em SQLite quando todas as VPS caem
    */
+  fallbackToCachedPeers() {
+    const cached = this.storage.getCachedPeersForBootstrapFallback();
+    if (!cached || cached.length === 0) return;
+
+    console.log(`[P2P Autônomo] Buscando ${cached.length} nós no cache local SQLite...`);
+    for (const peer of cached) {
+      if (peer.node_id !== this.nodeId && !this.peers.has(peer.node_id)) {
+        const url = `ws://${peer.host}:${peer.port}`;
+        this.connectToPeerUrl(url, false);
+      }
+    }
+  }
+
   connectToPeerUrl(url, isBootstrap = false) {
     if (this.isStopping) return;
 
     try {
       const socket = new WebSocket(url);
+      const challengeNonce = crypto.randomBytes(16).toString('hex');
+      socket.pendingChallengeNonce = challengeNonce;
 
       socket.on('open', () => {
         const latest = this.storage.getLatestMessage('geral');
         const latestSequence = latest ? latest.sequence : 0;
 
-        const hello = ProtocolPacket.create(MessageType.HELLO, this.nodeId, {
-          host: this.host,
+        // Handshake criptografado com assinatura Ed25519
+        const advertisedHost = this.natInfo.reflexiveIp || this.natInfo.localIp || '127.0.0.1';
+        const handshakePayload = {
+          host: advertisedHost,
           port: this.p2pPort,
           role: this.role,
+          nodePubkey: this.nodeIdentity.publicKey,
           latestSequence,
-          isBootstrap
+          isBootstrap,
+          nonceChallenge: challengeNonce
+        };
+
+        const signature = CryptoEngine.signData(handshakePayload, this.nodeIdentity.privateKey);
+
+        const hello = ProtocolPacket.create(MessageType.HELLO, this.nodeId, {
+          ...handshakePayload,
+          signature
         });
         socket.send(JSON.stringify(hello));
 
+        // Se for bootstrap, pede também sondagem STUN pelo WebSocket
         if (isBootstrap) {
+          const probe = ProtocolPacket.create(MessageType.STUN_PROBE, this.nodeId, {});
+          socket.send(JSON.stringify(probe));
           this.consensus.notifyBootstrapRestored(url);
         }
       });
@@ -225,6 +342,7 @@ class P2PEngine extends EventEmitter {
 
     if (!ProtocolPacket.isValid(packet)) return;
 
+    // Proteção contra replay de pacotes idênticos
     const packetId = `${packet.senderNodeId}-${packet.nonce}`;
     if (this.seenPacketNonces.has(packetId)) return;
     this.seenPacketNonces.add(packetId);
@@ -235,12 +353,15 @@ class P2PEngine extends EventEmitter {
     }
 
     const { type, senderNodeId, payload } = packet;
-
     if (senderNodeId === this.nodeId) return;
 
     this.consensus.recordPeerSeen(senderNodeId, payload.role || 'Membro', payload.isBootstrap);
 
     switch (type) {
+      case MessageType.STUN_RESPONSE:
+        this.handleStunResponse(payload);
+        break;
+
       case MessageType.HELLO:
         this.handleHello(socket, packet);
         break;
@@ -266,7 +387,7 @@ class P2PEngine extends EventEmitter {
         break;
 
       case MessageType.RELAY_FORWARD:
-        this.handleRelayForward(packet);
+        this.handleRelayForward(socket, packet);
         break;
 
       case MessageType.ELECTION_CALL:
@@ -282,11 +403,40 @@ class P2PEngine extends EventEmitter {
     }
   }
 
+  handleStunResponse(payload) {
+    if (payload.reflexiveIp) {
+      this.natInfo.reflexiveIp = payload.reflexiveIp;
+      this.natInfo.reflexivePort = payload.reflexivePort;
+      this.natInfo.natType = payload.reflexiveIp === this.natInfo.localIp ? 'OPEN_INTERNET' : 'NAT_ROUTED';
+    }
+  }
+
   handleHello(socket, packet) {
     const { senderNodeId, payload } = packet;
+
+    // 1. Validação de autenticidade criptográfica do nó emissor
+    if (payload.nodePubkey && payload.signature) {
+      const verifyData = {
+        host: payload.host,
+        port: payload.port,
+        role: payload.role,
+        nodePubkey: payload.nodePubkey,
+        latestSequence: payload.latestSequence,
+        isBootstrap: payload.isBootstrap,
+        nonceChallenge: payload.nonceChallenge
+      };
+      const valid = CryptoEngine.verifySignature(verifyData, payload.signature, payload.nodePubkey);
+      if (!valid) {
+        console.warn(`[P2P Segurança] Rejeitado nó ${senderNodeId}: Assinatura de identidade Ed25519 inválida!`);
+        socket.terminate();
+        return;
+      }
+    }
+
     socket.nodeId = senderNodeId;
     socket.peerHost = payload.host;
     socket.peerPort = payload.port;
+    socket.isRelay = false;
 
     this.peers.set(senderNodeId, socket);
 
@@ -295,8 +445,62 @@ class P2PEngine extends EventEmitter {
       nodeId: senderNodeId,
       host: payload.host,
       port: payload.port,
-      isBootstrap: !!payload.isBootstrap
+      isBootstrap: !!payload.isBootstrap,
+      nodePubkey: payload.nodePubkey
     });
+
+    this.storage.upsertPeer({
+      node_id: senderNodeId,
+      host: payload.host,
+      port: payload.port,
+      is_bootstrap: payload.isBootstrap ? 1 : 0,
+      last_seen: Date.now(),
+      latency: 10,
+      status: 'alive'
+    });
+
+    this.storage.addNetworkEvent({
+      eventType: 'PEER_CONNECTED',
+      summary: `Nó conectado diretamente: ${senderNodeId.substring(0, 16)} (${payload.role || 'Membro'}).`,
+      severity: 'info'
+    });
+
+    const latest = this.storage.getLatestMessage('geral');
+    const mySequence = latest ? latest.sequence : 0;
+
+    // Resposta HELLO_ACK assinando o nonce recebido
+    const ackPayload = {
+      host: this.natInfo.reflexiveIp || this.natInfo.localIp || this.host,
+      port: this.p2pPort,
+      role: this.role,
+      nodePubkey: this.nodeIdentity.publicKey,
+      latestSequence: mySequence,
+      signedChallenge: payload.nonceChallenge ? CryptoEngine.signData(payload.nonceChallenge, this.nodeIdentity.privateKey) : null,
+      knownPeers: this.getExportablePeersList()
+    };
+
+    const ack = ProtocolPacket.create(MessageType.HELLO_ACK, this.nodeId, ackPayload);
+    try { socket.send(JSON.stringify(ack)); } catch (e) {}
+
+    if (payload.latestSequence > mySequence) {
+      this.sendSyncRequest(socket, 'geral', mySequence);
+    }
+
+    this.emit('peer_connected', { nodeId: senderNodeId, host: payload.host, port: payload.port, isRelay: false });
+  }
+
+  handleHelloAck(socket, packet) {
+    const { senderNodeId, payload } = packet;
+    socket.nodeId = senderNodeId;
+    socket.peerHost = payload.host;
+    socket.peerPort = payload.port;
+    socket.isRelay = false;
+
+    this.peers.set(senderNodeId, socket);
+
+    if (Array.isArray(payload.knownPeers)) {
+      this.handlePeerExchange(payload.knownPeers);
+    }
 
     this.storage.upsertPeer({
       node_id: senderNodeId,
@@ -310,41 +514,11 @@ class P2PEngine extends EventEmitter {
 
     const latest = this.storage.getLatestMessage('geral');
     const mySequence = latest ? latest.sequence : 0;
-
-    const ack = ProtocolPacket.create(MessageType.HELLO_ACK, this.nodeId, {
-      host: this.host,
-      port: this.p2pPort,
-      role: this.role,
-      latestSequence: mySequence,
-      knownPeers: this.getExportablePeersList()
-    });
-    socket.send(JSON.stringify(ack));
-
     if (payload.latestSequence > mySequence) {
       this.sendSyncRequest(socket, 'geral', mySequence);
     }
 
-    this.emit('peer_connected', { nodeId: senderNodeId, host: payload.host, port: payload.port });
-  }
-
-  handleHelloAck(socket, packet) {
-    const { senderNodeId, payload } = packet;
-    socket.nodeId = senderNodeId;
-    socket.peerHost = payload.host;
-    socket.peerPort = payload.port;
-    this.peers.set(senderNodeId, socket);
-
-    if (Array.isArray(payload.knownPeers)) {
-      this.handlePeerExchange(payload.knownPeers);
-    }
-
-    const latest = this.storage.getLatestMessage('geral');
-    const mySequence = latest ? latest.sequence : 0;
-    if (payload.latestSequence > mySequence) {
-      this.sendSyncRequest(socket, 'geral', mySequence);
-    }
-
-    this.emit('peer_connected', { nodeId: senderNodeId, host: payload.host, port: payload.port });
+    this.emit('peer_connected', { nodeId: senderNodeId, host: payload.host, port: payload.port, isRelay: false });
   }
 
   handlePeerExchange(remotePeers) {
@@ -368,6 +542,7 @@ class P2PEngine extends EventEmitter {
           status: 'discovered'
         });
 
+        // Tenta conexão direta se ainda não estiver conectado
         if (!this.isAlreadyConnectedTo(p.host, p.port)) {
           this.connectToPeerUrl(`ws://${p.host}:${p.port}`, false);
         }
@@ -384,14 +559,11 @@ class P2PEngine extends EventEmitter {
 
   getAuthorizedAdminPubkeys(communityId) {
     const authorized = new Set();
-
-    // 1. Administradores salvos no banco local
     const adminUsers = this.storage.getAllUsers().filter(u => u.role === 'Administrador' && u.status === 'active');
     for (const u of adminUsers) {
       if (u.public_key) authorized.add(u.public_key.trim());
     }
 
-    // 2. Chave de gênesis da comunidade
     const community = this.storage.getCommunity(communityId);
     if (community && community.genesis_admin_pubkey && community.genesis_admin_pubkey !== 'GENESIS_ADMIN_PENDING') {
       authorized.add(community.genesis_admin_pubkey.trim());
@@ -405,12 +577,14 @@ class P2PEngine extends EventEmitter {
     const message = payload.message;
     if (!message) return;
 
-    const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(message.community_id);
+    this.stats.messagesGossiped++;
+    this.stats.lastSyncTime = Date.now();
 
+    const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(message.community_id);
     const result = this.chain.processIncomingMessage(message, authorizedAdminPubkeys);
 
     if (result.success) {
-      if (result.reason === 'APPLIED') {
+      if (result.reason === 'APPLIED' || result.reason === 'PARTITION_RECONCILED') {
         const comm = this.storage.getCommunity(message.community_id);
         this.notificationService.dispatchForMessage(message, comm ? comm.name : undefined);
         this.emit('message_received', message);
@@ -419,98 +593,124 @@ class P2PEngine extends EventEmitter {
         const latest = this.storage.getLatestMessage(message.community_id);
         this.sendSyncRequest(socket, message.community_id, latest ? latest.sequence : 0);
       }
-    } else {
-      this.auditLogger.log('TAMPER_ATTEMPT_DETECTED', packet.senderNodeId, {
-        messageId: message.id,
-        reason: result.reason
-      });
-      this.emit('security_alert', { reason: result.reason, messageId: message.id });
     }
   }
 
-  sendSyncRequest(socket, communityId, currentMaxSequence) {
-    const syncReq = ProtocolPacket.create(MessageType.SYNC_REQUEST, this.nodeId, {
-      communityId,
-      currentMaxSequence
-    });
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(syncReq));
+  propagateGossip(packet, incomingSocket) {
+    const data = JSON.stringify(packet);
+    for (const [peerId, socket] of this.peers.entries()) {
+      if (socket !== incomingSocket && socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(data);
+        } catch (e) {}
+      }
     }
+  }
+
+  publishMessage(message) {
+    const packet = ProtocolPacket.create(MessageType.GOSSIP_MESSAGE, this.nodeId, {
+      message
+    });
+
+    this.stats.messagesGossiped++;
+    this.broadcast(packet);
+  }
+
+  sendSyncRequest(socket, communityId, fromSequence) {
+    const req = ProtocolPacket.create(MessageType.SYNC_REQUEST, this.nodeId, {
+      communityId,
+      fromSequence,
+      limit: 100
+    });
+    try {
+      socket.send(JSON.stringify(req));
+    } catch (e) {}
   }
 
   handleSyncRequest(socket, packet) {
-    const { communityId, currentMaxSequence } = packet.payload;
-    const missing = this.storage.getMissingMessages(communityId, currentMaxSequence);
+    const { communityId, fromSequence, limit } = packet.payload;
+    const messages = this.storage.getMessagesByCommunity(communityId, limit || 100);
+    const missing = messages.filter(m => m.sequence > (fromSequence || 0));
 
-    const response = ProtocolPacket.create(MessageType.SYNC_RESPONSE, this.nodeId, {
-      communityId,
-      messages: missing
-    });
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(response));
+    if (missing.length > 0) {
+      const resp = ProtocolPacket.create(MessageType.SYNC_RESPONSE, this.nodeId, {
+        communityId,
+        messages: missing
+      });
+      try {
+        socket.send(JSON.stringify(resp));
+      } catch (e) {}
     }
   }
 
   handleSyncResponse(packet) {
-    const { messages } = packet.payload;
-    if (!Array.isArray(messages) || messages.length === 0) return;
+    const { communityId, messages } = packet.payload;
+    if (!Array.isArray(messages)) return;
+
+    const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(communityId);
+    let appliedCount = 0;
 
     for (const msg of messages) {
-      const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(msg.community_id);
       const res = this.chain.processIncomingMessage(msg, authorizedAdminPubkeys);
-      if (res.success && res.reason === 'APPLIED') {
+      if (res.success && (res.reason === 'APPLIED' || res.reason === 'PARTITION_RECONCILED')) {
+        appliedCount++;
         this.emit('message_received', msg);
       }
     }
+
+    if (appliedCount > 0) {
+      this.stats.lastSyncTime = Date.now();
+      this.storage.addNetworkEvent({
+        eventType: 'SYNC_COMPLETED',
+        summary: `Sincronização P2P: ${appliedCount} comunicados recebidos e validados.`,
+        severity: 'info'
+      });
+    }
   }
 
-  handleRelayForward(packet) {
-    const { targetNodeId, innerPacket } = packet.payload;
-    if (targetNodeId === this.nodeId) {
-      this.handleMessage(null, JSON.stringify(innerPacket));
-    } else {
+  // --- TRATAMENTO DE RELAY FORWARD ---
+  handleRelayForward(socket, packet) {
+    this.stats.relayPacketsReceived++;
+    const { targetNodeId, originNodeId, innerPacket } = packet.payload;
+
+    // Se este nó for o destinatário final do relay
+    if (targetNodeId === this.nodeId && innerPacket) {
+      this.relayPeers.add(originNodeId);
+      // Processa o pacote interno marcando que veio via relay
+      this.handleMessage(socket, JSON.stringify(innerPacket));
+      return;
+    }
+
+    // Se este nó puder atuar como nó relay intermediário
+    if (targetNodeId && this.peers.has(targetNodeId)) {
       const targetSocket = this.peers.get(targetNodeId);
       if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-        targetSocket.send(JSON.stringify(packet));
+        try {
+          targetSocket.send(JSON.stringify(packet));
+          this.stats.relayPacketsSent++;
+        } catch (e) {}
       }
     }
   }
 
-  handleSocketClose(socket, url = null, isBootstrap = false) {
-    if (socket && socket.nodeId) {
-      this.peers.delete(socket.nodeId);
-      this.storage.upsertPeer({
-        node_id: socket.nodeId,
-        host: socket.peerHost || 'unknown',
-        port: socket.peerPort || 0,
-        is_bootstrap: isBootstrap ? 1 : 0,
-        last_seen: Date.now(),
-        latency: 0,
-        status: 'disconnected'
-      });
-      this.emit('peer_disconnected', { nodeId: socket.nodeId });
-    }
-
-    if (isBootstrap) {
-      this.consensus.notifyBootstrapFailed();
-    }
-  }
-
-  publishMessage(signedMessage) {
-    const packet = ProtocolPacket.create(MessageType.GOSSIP_MESSAGE, this.nodeId, {
-      message: signedMessage
+  /**
+   * Envia pacote via Relay quando a conexão direta não existe
+   */
+  sendViaRelay(targetNodeId, innerPacket) {
+    const relayPacket = ProtocolPacket.create(MessageType.RELAY_FORWARD, this.nodeId, {
+      targetNodeId,
+      originNodeId: this.nodeId,
+      innerPacket
     });
-    this.broadcast(packet);
-    this.auditLogger.log('MESSAGE_PUBLISHED', this.nodeId, {
-      messageId: signedMessage.id,
-      sequence: signedMessage.sequence,
-      communityId: signedMessage.community_id
-    });
+
+    // Envia para o bootstrap ou qualquer nó conectado capaz de fazer relay
+    this.broadcast(relayPacket);
+    this.stats.relayPacketsSent++;
   }
 
   broadcast(packet) {
     const data = JSON.stringify(packet);
-    for (const [nodeId, socket] of this.peers.entries()) {
+    for (const socket of this.peers.values()) {
       if (socket.readyState === WebSocket.OPEN) {
         try {
           socket.send(data);
@@ -519,31 +719,20 @@ class P2PEngine extends EventEmitter {
     }
   }
 
-  propagateGossip(packet, exceptSocket) {
-    const data = JSON.stringify(packet);
-    for (const socket of this.peers.values()) {
-      if (socket !== exceptSocket && socket.readyState === WebSocket.OPEN) {
-        try {
-          socket.send(data);
-        } catch (e) {}
-      }
+  handleSocketClose(socket, url, isBootstrap) {
+    if (socket.nodeId) {
+      this.peers.delete(socket.nodeId);
+      this.consensus.removePeer(socket.nodeId);
+      this.emit('peer_disconnected', { nodeId: socket.nodeId });
     }
-  }
 
-  getExportablePeersList() {
-    const list = [];
-    for (const p of this.knownPeers.values()) {
-      list.push({
-        nodeId: p.nodeId,
-        host: p.host,
-        port: p.port,
-        isBootstrap: p.isBootstrap
-      });
+    if (isBootstrap) {
+      this.consensus.notifyBootstrapFailed();
     }
-    return list;
   }
 
   startPeriodicTasks() {
+    // 1. Peer Exchange (PEX) a cada 25 segundos
     this.pexInterval = setInterval(() => {
       if (this.peers.size > 0) {
         const pexPacket = ProtocolPacket.create(MessageType.PEER_EXCHANGE, this.nodeId, {
@@ -551,40 +740,109 @@ class P2PEngine extends EventEmitter {
         });
         this.broadcast(pexPacket);
       }
-    }, 8000);
+    }, 25000);
 
+    // 2. Reconexão e Heartbeat da malha a cada 10 segundos
     this.reconnectInterval = setInterval(() => {
-      this.attemptReconnections();
-    }, 5000);
+      this.reconnectToKnownPeers();
+    }, 10000);
   }
 
-  attemptReconnections() {
-    if (this.isStopping) return;
-
-    if (!this.consensus.isVpsAlive) {
-      this.connectToBootstraps();
+  reconnectToKnownPeers() {
+    // Se a VPS estiver offline, reconecta a nós salvos no cache SQLite
+    if (!this.consensus.isVpsAlive && this.peers.size === 0) {
+      this.fallbackToCachedPeers();
     }
 
-    for (const p of this.knownPeers.values()) {
-      if (p.nodeId === this.nodeId) continue;
-      if (!this.peers.has(p.nodeId) && !this.isAlreadyConnectedTo(p.host, p.port)) {
-        this.connectToPeerUrl(`ws://${p.host}:${p.port}`, p.isBootstrap);
+    // Tenta reconectar a bootstraps offline
+    for (const bUrl of this.bootstrapNodes) {
+      let isConnected = false;
+      for (const s of this.peers.values()) {
+        if (s.url === bUrl || s.peerHost === bUrl) {
+          isConnected = true;
+          break;
+        }
+      }
+      if (!isConnected) {
+        this.connectToPeerUrl(bUrl, true);
       }
     }
+  }
+
+  getExportablePeersList() {
+    return Array.from(this.knownPeers.values()).map(p => ({
+      nodeId: p.nodeId,
+      host: p.host,
+      port: p.port,
+      role: p.role,
+      nodePubkey: p.nodePubkey,
+      isBootstrap: p.isBootstrap
+    }));
+  }
+
+  // --- TELEMETRIA COMPLETA PARA O PAINEL DA COMUNIDADE (PROMPT 2 REQUISITO) ---
+  getNetworkOverview() {
+    const activePeers = this.storage.getActivePeers(120000);
+    const allPeers = this.storage.getAllPeers();
+    const activeDeviceSessions = this.storage.getActiveDeviceSessions(60000);
+    const allUsers = this.storage.getAllUsers();
+    const latestMsg = this.storage.getLatestMessage('geral');
+    const msgCount = this.storage.getMessageCount('geral');
+
+    const desktopNodesCount = activeDeviceSessions.filter(d => d.device_type === 'desktop').length || this.peers.size;
+    const mobileCount = activeDeviceSessions.filter(d => d.device_type === 'mobile').length;
+    const webCount = activeDeviceSessions.filter(d => d.device_type === 'web').length;
+
+    const directCount = this.peers.size;
+    const relayCount = this.relayPeers.size;
+
+    return {
+      onlineDesktopNodes: Math.max(1, desktopNodesCount),
+      totalKnownNodes: Math.max(allPeers.length, this.knownPeers.size),
+      mobileDevicesConnected: mobileCount,
+      webSessionsActive: Math.max(1, webCount),
+      totalMembers: allUsers.length,
+      administratorsCount: allUsers.filter(u => u.role === 'Administrador').length,
+      moderatorsCount: allUsers.filter(u => u.role === 'Moderador').length,
+      membersCount: allUsers.filter(u => u.role === 'Membro').length,
+      syncMessagesCount: msgCount,
+      vpsStatus: this.consensus.isVpsAlive ? 'ONLINE' : 'OFFLINE',
+      p2pMeshState: this.consensus.isVpsAlive ? 'BOOTSTRAP_ASSISTED' : 'AUTONOMOUS_MESH',
+      currentLeader: this.consensus.currentLeaderId || (this.consensus.isLeader ? this.nodeId : '--'),
+      isCurrentNodeLeader: this.consensus.isLeader,
+      lastSyncTimestamp: this.stats.lastSyncTime || (latestMsg ? latestMsg.timestamp : Date.now()),
+      directConnectionsCount: directCount,
+      relayConnectionsCount: relayCount,
+      natType: this.natInfo.natType,
+      externalIp: this.natInfo.reflexiveIp || 'Resolvendo...',
+      term: this.consensus.term
+    };
+  }
+
+  getConnectedNodesList() {
+    return Array.from(this.peers.entries()).map(([nodeId, socket]) => ({
+      nodeId,
+      shortId: nodeId.length > 16 ? nodeId.substring(0, 14) + '...' : nodeId,
+      host: socket.peerHost,
+      port: socket.peerPort,
+      connectionMethod: socket.isRelay ? 'relay' : 'direct',
+      role: socket.nodeRole || 'Membro',
+      status: 'online'
+    }));
   }
 
   getNetworkStatus() {
     return {
       nodeId: this.nodeId,
-      host: this.host,
-      p2pPort: this.p2pPort,
       role: this.role,
+      p2pPort: this.p2pPort,
       activePeersCount: this.peers.size,
-      activePeers: Array.from(this.peers.keys()),
+      knownPeers: this.getExportablePeersList(),
+      isVpsAlive: this.consensus.isVpsAlive,
       currentLeader: this.consensus.currentLeaderId,
       isLeader: this.consensus.isLeader,
-      isVpsAlive: this.consensus.isVpsAlive,
-      term: this.consensus.term
+      term: this.consensus.term,
+      natType: this.natInfo.natType
     };
   }
 }

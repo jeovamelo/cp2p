@@ -1,6 +1,8 @@
 /**
- * Comunidade Resiliente - Servidor VPS de Bootstrap, Descoberta e Relay Inicial
+ * Comunidade Resiliente - Servidor VPS de Bootstrap, Descoberta e Relay Central
  * Ponto de encontro inicial (Rendezvous / STUN / Relay).
+ * Fornece descoberta mútua de peers, resolução de IP reflexivo (STUN probe)
+ * e relay transparente com rate limiting sem inspecionar o conteúdo privado.
  */
 
 const WebSocket = require('ws');
@@ -12,40 +14,69 @@ class VpsBootstrapServer {
    * @param {object} options
    * @param {number} [options.port=4001] - Porta do servidor bootstrap
    * @param {string} [options.host='0.0.0.0']
+   * @param {Array<string>} [options.peerBootstraps] - URLs de outras VPS parceiras
    */
   constructor(options = {}) {
     this.port = options.port || 4001;
     this.host = options.host || '0.0.0.0';
     this.nodeId = `vps-bootstrap-${this.port}`;
+    this.peerBootstraps = options.peerBootstraps || [];
     this.peers = new Map(); // socket -> peerInfo
     this.httpServer = null;
     this.wss = null;
     this.isRunning = false;
+
+    this.stats = {
+      startedAt: Date.now(),
+      relayPackets: 0,
+      relayBytes: 0,
+      totalHandshakes: 0
+    };
   }
 
   start() {
     return new Promise((resolve, reject) => {
       this.httpServer = http.createServer((req, res) => {
-        if (req.url === '/status') {
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+
+        if (req.url === '/status' || req.url === '/api/status') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             status: 'ONLINE',
             nodeId: this.nodeId,
             role: 'BOOTSTRAP_DISCOVERY_RELAY',
             activePeers: this.peers.size,
-            uptime: process.uptime()
-          }));
+            uptimeSeconds: Math.floor((Date.now() - this.stats.startedAt) / 1000),
+            relayStats: {
+              packetsForwarded: this.stats.relayPackets,
+              bytesForwarded: this.stats.relayBytes
+            },
+            peers: Array.from(this.peers.values()).map(p => ({
+              nodeId: p.nodeId,
+              role: p.role,
+              isRelayCapable: true,
+              lastSeen: p.lastSeen
+            }))
+          }, null, 2));
           return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Comunidade Resiliente - VPS Bootstrap Node\nStatus: ONLINE');
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(`Comunidade Resiliente - VPS Bootstrap Node\nID: ${this.nodeId}\nStatus: ONLINE\nNós Ativos: ${this.peers.size}`);
       });
 
       this.wss = new WebSocket.Server({ server: this.httpServer });
 
       this.wss.on('connection', (socket, req) => {
-        const clientIp = req.socket.remoteAddress;
+        const rawIp = req.socket.remoteAddress || '';
+        const clientIp = rawIp.replace(/^.*:/, '') || '127.0.0.1';
 
         socket.on('message', (raw) => {
           let packet;
@@ -59,14 +90,34 @@ class VpsBootstrapServer {
 
           const { type, senderNodeId, payload } = packet;
 
+          // 1. Resolução STUN / IP Reflexivo
+          if (type === MessageType.STUN_PROBE) {
+            const stunResp = ProtocolPacket.create(MessageType.STUN_RESPONSE, this.nodeId, {
+              reflexiveIp: clientIp === '1' ? '127.0.0.1' : clientIp,
+              reflexivePort: req.socket.remotePort || 0,
+              serverTime: Date.now()
+            });
+            try { socket.send(JSON.stringify(stunResp)); } catch (e) {}
+            return;
+          }
+
+          // 2. Apresentação Inicial (Handshake HELLO)
           if (type === MessageType.HELLO) {
+            this.stats.totalHandshakes++;
+
+            const advertisedHost = payload.host && payload.host !== '127.0.0.1' && payload.host !== 'localhost'
+              ? payload.host
+              : clientIp;
+
             const peerInfo = {
               nodeId: senderNodeId,
-              host: payload.host === '127.0.0.1' ? '127.0.0.1' : (clientIp || payload.host),
+              host: advertisedHost,
               port: payload.port,
               role: payload.role || 'Membro',
+              nodePubkey: payload.nodePubkey || null,
               latestSequence: payload.latestSequence || 0,
-              lastSeen: Date.now()
+              lastSeen: Date.now(),
+              connectedAt: Date.now()
             };
             this.peers.set(socket, peerInfo);
 
@@ -77,6 +128,7 @@ class VpsBootstrapServer {
                 host: p.host,
                 port: p.port,
                 role: p.role,
+                nodePubkey: p.nodePubkey,
                 isBootstrap: false
               }));
 
@@ -85,24 +137,66 @@ class VpsBootstrapServer {
               port: this.port,
               role: 'VPS_Bootstrap',
               isBootstrap: true,
+              clientReflexiveIp: clientIp,
               knownPeers
             });
-            socket.send(JSON.stringify(ack));
+            try { socket.send(JSON.stringify(ack)); } catch (e) {}
 
+            // Informa aos outros pares sobre o novo nó conectado
             const announcePacket = ProtocolPacket.create(MessageType.PEER_EXCHANGE, this.nodeId, {
               peers: [peerInfo]
             });
             this.broadcastToOthers(socket, announcePacket);
-          } else if (type === MessageType.GOSSIP_MESSAGE || type === MessageType.ELECTION_CALL || type === MessageType.ELECTION_VOTE || type === MessageType.ELECTION_DECLARE) {
-            this.broadcastToOthers(socket, packet);
-          } else if (type === MessageType.RELAY_FORWARD) {
+            return;
+          }
+
+          // 3. Encaminhamento de Relay (quando conexão direta falha)
+          if (type === MessageType.RELAY_FORWARD) {
             const { targetNodeId } = payload;
+            if (!targetNodeId) return;
+
+            // Rate limiting por conexão (máximo 60 pacotes por segundo)
+            const now = Date.now();
+            socket.relayCount = (socket.relayCount || 0) + 1;
+            if (socket.relayWindowReset && now < socket.relayWindowReset) {
+              if (socket.relayCount > 60) {
+                console.warn(`[VPS Relay] Limite de tráfego excedido para ${senderNodeId}. Descartando.`);
+                return;
+              }
+            } else {
+              socket.relayWindowReset = now + 1000;
+              socket.relayCount = 1;
+            }
+
+            let forwarded = false;
             for (const [s, p] of this.peers.entries()) {
               if (p.nodeId === targetNodeId && s.readyState === WebSocket.OPEN) {
-                s.send(JSON.stringify(packet));
+                const jsonStr = JSON.stringify(packet);
+                try {
+                  s.send(jsonStr);
+                  this.stats.relayPackets++;
+                  this.stats.relayBytes += jsonStr.length;
+                  forwarded = true;
+                } catch (e) {}
                 break;
               }
             }
+
+            // Log técnico estritamente sem dados privados
+            console.log(`[VPS Relay] Trânsito: ${senderNodeId} -> ${targetNodeId} (${forwarded ? 'OK' : 'Destinatário Inalcançável'})`);
+            return;
+          }
+
+          // 4. Difusão Epidêmica e Mensagens de Governança/Consenso
+          if (
+            type === MessageType.GOSSIP_MESSAGE ||
+            type === MessageType.ELECTION_CALL ||
+            type === MessageType.ELECTION_VOTE ||
+            type === MessageType.ELECTION_DECLARE ||
+            type === MessageType.ADMIN_ACTION ||
+            type === MessageType.KEY_ROTATION
+          ) {
+            this.broadcastToOthers(socket, packet);
           }
         });
 

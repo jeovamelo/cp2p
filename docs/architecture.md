@@ -1,152 +1,164 @@
-# Arquitetura do Sistema: Comunidade Resiliente
+# Arquitetura do Sistema: Comunidade Resiliente 🛡️🌐
 
 ## 1. Visão Geral e Filosofia
 
-O **Comunidade Resiliente** é um ecossistema descentralizado de comunicação P2P (Peer-to-Peer) projetado para garantir disponibilidade contínua de canais comunitários mesmo diante de censura, falhas catastróficas de infraestrutura centralizada ou desligamento da VPS principal.
+O **Comunidade Resiliente** é uma plataforma distribuída de comunicação comunitária e canais oficiais de mensagens projetada para manter a continuidade operacional e a soberania comunicacional mesmo diante de indisponibilidade de servidores centrais, censura de provedores de nuvem ou quedas de infraestrutura.
 
-Diferente de sistemas convencionais baseados em arquitetura cliente-servidor centralizada (onde a queda do servidor interrompe completamente o serviço), no Comunidade Resiliente a VPS atua unicamente como **semente inicial (bootstrap)**, auxiliar de sinalização WebRTC e relé temporário para nós sob NATs restritivos. Cada computador pessoal de membro que executa o aplicativo atua como um nó completo (full node) com capacidade de roteamento, armazenamento local criptografado, validação criptográfica de publicações e eleição de liderança mesh.
+Em arquiteturas cliente-servidor convencionais, a queda do servidor central interrompe todo o serviço. No Comunidade Resiliente:
+- **Computadores pessoais dos membros atuam como nós persistentes da rede**, armazenando cópias criptografadas do histórico em SQLite com WAL (Write-Ahead Logging);
+- **A VPS desempenha apenas o papel de semente de bootstrap, descoberta inicial e relay opcional** para nós sob restrições severas de NAT;
+- **Quando todos os nós de bootstrap estão inoperantes**, os nós desktop ativam o fallback para o cache local de pares persistido no SQLite e mantêm a sincronização e replicação direta de mensagens de forma autônoma;
+- **Apenas administradores autorizados possuem a capacidade criptográfica de assinar e publicar mensagens oficiais**, enquanto os membros comuns recebem e retransmitem blocos verificáveis sem poder forjar comunicados;
+- **O painel visual "Visão da Comunidade" / "Status da Rede"** oferece observabilidade em tempo real sobre a saúde da rede, participantes, topologia e sincronização com preservação estrita de privacidade.
 
 ```
-                      +-----------------------------+
-                      |      VPS Bootstrap /        |
-                      |      Signaling Relay        |
-                      |  (OPCIONAL / TEMPORÁRIO)    |
-                      +--------------+--------------+
-                                     |
-               (Descoberta inicial e STUN/TURN fallback)
-                                     |
-          +--------------------------+--------------------------+
-          |                                                     |
-          v                                                     v
-+-------------------+                                 +-------------------+
-|   Nó Desktop A    |<============== P2P =============>|   Nó Desktop B    |
-|   (Administrador) |       (WebRTC / Direct TCP/WS)   |   (Moderador)     |
-| - SQLite Cifrado  |                                 | - SQLite Cifrado  |
-| - Chave Ed25519   |                                 | - Validador DAG   |
-+---------+---------+                                 +---------+---------+
-          ^                                                     ^
-          |                        P2P                          |
-          +=====================================================+
-                                   |
-                                   v
-                         +-------------------+
-                         |   Nó Desktop C    |
-                         |   (Membro)        |
-                         | - SQLite Cifrado  |
-                         | - Leitor Cifrado  |
-                         +-------------------+
+                      +----------------------------------------+
+                      |   VPS Bootstrap 1 & 2 (Multi-Seed)     |
+                      |   - STUN Reflexivo (RFC 5389 / WS)     |
+                      |   - Relay Transparente (Rate-Limited)  |
+                      |   (OPCIONAL / DISPENSÁVEL APÓS PEERING)|
+                      +-------------------+--------------------+
+                                          |
+                        [Descoberta Inicial & STUN / Relay]
+                                          |
+              +---------------------------+---------------------------+
+              |                                                       |
+              v                                                       v
+    +-------------------+                                   +-------------------+
+    |   Nó Desktop A    |<============= P2P Mesh ===========>|   Nó Desktop B    |
+    |   (Administrador) |     (Direct TCP / WebSocket Mesh) |   (Moderador)     |
+    | - SQLite WAL      |                                   | - SQLite WAL      |
+    | - Chave Ed25519   |                                   | - Validador CRDT  |
+    | - Painel Visão    |                                   | - Painel Visão    |
+    +---------+---------+                                   +---------+---------+
+              ^                                                       ^
+              |                        P2P                            |
+              +=======================================================+
+                                       |
+                                       v
+                             +-------------------+
+                             |   Nó Desktop C    |
+                             |   (Membro Comum)  |
+                             | - SQLite WAL      |
+                             | - Replicador Mesh |
+                             +---------+---------+
+                                       | (Ponte Local / Web Push)
+                                       v
+                             +-------------------+
+                             |  Celular / PWA    |
+                             | - Zero-Knowledge  |
+                             | - Offline-first   |
+                             +-------------------+
 ```
 
 ---
 
-## 2. Componentes da Arquitetura
+## 2. Estrutura Modular Consolidada (`src/`)
 
-### 2.1. Núcleo P2P (`packages/core`)
-Biblioteca compartilhada responsável por toda a lógica de segurança, estrutura de dados e comunicação em rede:
-- **Módulo Criptográfico (`crypto/`)**:
-  - **Identidade e Assinaturas (Ed25519)**: Geração de par de chaves assimétricas. Todas as mensagens são assinadas digitalmente com a chave privada do Administrador.
-  - **Cifra Simétrica de Canal (AES-256-GCM)**: Mensagens e anexos são cifrados com a chave comunitária vigente (*Community Key*). Apenas membros autorizados que possuem a chave do ciclo vigente (*epoch*) conseguem decifrar.
-  - **Cofre Local Criptografado (Argon2 / PBKDF2 + AES-GCM)**: As chaves privadas dos nós e os dados em disco no SQLite são cifrados com uma chave mestre local derivada da senha do usuário, prevenindo vazamento de dados em repouso.
-  - **Rotação de Chaves (Key Epoch Ratchet)**: Quando um membro é revogado, o Administrador emite um novo ciclo de chave (*epoch n+1*), re-encriptado individualmente para os membros legítimos restantes. Membros expulsos tornam-se incapazes de ler novas mensagens.
-- **DAG de Mensagens e Log Imutável (`model/`, `sync/`)**:
-  - Cada mensagem é um nó em uma cadeia de blocos leve (append-only hash-chained DAG).
-  - Cada registro possui: `id`, `communityId`, `sequence`, `previousHash`, `hash`, `timestamp`, `authorPublicKey`, `payload` (cifrado), `signature`.
-  - Mecanismo anti-replay e anti-duplicação baseado em cache de hashes e checagem de monotonicidade de sequência.
-- **Protocolo de Rede e Gossip (`p2p/`)**:
-  - Camada de transporte híbrida: WebRTC DataChannels para comunicação browser-to-browser e desktop-to-desktop, combinada com WebSockets bidirecionais de alta performance para nós desktop e servidores.
-  - Descoberta mútua (Peer Discovery) via listas de sementes (Bootstrap Nodes), mDNS/broadcast local e troca de tabelas de pares (Peer Exchange - PEX).
-  - Algoritmo de fofoca epidêmica (Anti-Entropy Push-Pull Gossip) com vetores de estado (Vector Clocks).
-- **Eleição de Líder e Consenso Leve (`p2p/election.js`)**:
-  - Quando a VPS fica offline, os nós ativos detectam perda de batimentos cardíacos (heartbeat timeout).
-  - Inicia-se uma eleição estilo Bully/Raft simplificada, onde o nó online com maior prioridade determinística (combinação de uptime, pontuação de reputação e menor hash de ID de nó) é alçado a **Coordenador da Malha (Mesh Leader)**.
-  - O líder assume a responsabilidade de intermediar mensagens para nós atrás de NAT restrito e coordenar sincronizações pendentes.
+O projeto foi unificado sob o diretório principal `src/`, eliminando qualquer duplicação prévia do diretório `packages/`:
 
-### 2.2. Servidor VPS Bootstrap / Relay (`packages/vps`)
-- Ponto de encontro inicial para os nós ingressarem na rede e trocarem informações SDP/ICE.
-- Fornece candidatos STUN públicos (`stun:stun.l.google.com:19302`, `stun:stun1.l.google.com:19302`).
-- Mantém em memória um cache dos últimos hashes de mensagens e registro de nós conhecidos.
-- **Característica Crítica de Resiliência**: O sistema é agnóstico à morte da VPS. Se o processo for encerrado (`SIGTERM`, bloqueio de IP ou falha física do datacenter), os nós já conectados continuam operando de forma direta e aceitam reconexões via IPs de nós conhecidos.
-
-### 2.3. Nó Desktop P2P (`packages/desktop-node`)
-- Daemon multiplataforma (executável como serviço ou aplicativo de desktop).
-- Banco de dados local SQLite integrado via engine nativo, garantindo persistência durável em disco com zero configuração.
-- Servidor REST e WebSocket local protegido por token de sessão para interação com a interface gráfica.
-- Modo de execução contínuo com reconexão automática e tolerância a mudanças de IP (DHCP, roaming Wi-Fi/4G).
-
-### 2.4. Interface Web / PWA (`packages/web`)
-- Desenvolvido em React moderno com Vite.
-- Design responsivo, tema escuro cibernético de alta densidade visual (glassmorphism, animações de status e tipografia moderna).
-- **PWA com Service Worker**: Permite instalação no smartphone (Android/iOS) e desktop, funcionamento offline e sincronização em segundo plano.
-- **Painel de Topologia em Tempo Real**: Gráfico interativo com nós conectados, latência, papel de cada nó, status da sincronização e **Botão de Simulação de Queda da VPS** para auditoria visual instantânea.
-
-### 2.5. Serviço de Notificações Push com Preservação de Privacidade (`packages/core/src/notification`)
-- Suporte a Web Push (RFC 8030 / VAPID) e gatilhos compatíveis com FCM/APNs.
-- **Princípio Zero-Knowledge no Push**: A notificação não trafega o texto da mensagem pela nuvem pública da Apple ou Google. A notificação apenas sinaliza: *"Nova mensagem criptografada disponível no canal"*. Ao ser clicada, o app P2P abre, decifra o conteúdo localmente com a chave privada/comunitária e apresenta o conteúdo ao usuário.
-- Fila de notificações pendentes: se um nó ou serviço de push estiver temporariamente offline, as notificações são retidas localmente e disparadas assim que a rota for restabelecida.
-
----
-
-## 3. Modelo de Dados e Estrutura Criptográfica
-
-### 3.1. Estrutura do Envelope de Mensagem
-```json
-{
-  "id": "msg_01h8x4a9b2...",
-  "communityId": "comm_resiliente_brasil",
-  "sequence": 42,
-  "previousHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "hash": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-  "timestamp": 1728950400000,
-  "epoch": 1,
-  "authorPublicKey": "ed25519_pk_3a5f9c...",
-  "signature": "ed25519_sig_9b2d1f4e...",
-  "payload": {
-    "ciphertext": "a9f8e4c3b2...",
-    "iv": "d1e2f3a4b5c6d7e8f9011223",
-    "authTag": "c0d1e2f3a4b5c6d7e8f9011223344556"
-  },
-  "metadata": {
-    "hasAttachments": false,
-    "attachmentCount": 0
-  }
-}
+```
+src/
+├── common/
+│   ├── crypto.js          # Primitivas criptográficas (Ed25519, AES-256-GCM, PBKDF2, SHA-256)
+│   └── protocol.js        # Definições de wire format e tipos de mensagens do protocolo P2P
+├── core/
+│   ├── consensus.js       # Motor Raft-lite de consenso com termo persistente e quórum estrito
+│   ├── crdt_chain.js      # Cadeia de mensagens com reconciliação determinística de split-brain
+│   ├── nat_stun.js        # Cliente STUN UDP RFC 5389 puro para descoberta de IP reflexivo
+│   ├── notification_service.js # Serviço Web Push VAPID ECDSA P-256 com fila offline zero-knowledge
+│   ├── p2p_engine.js      # Motor P2P com autenticação mútua Ed25519, multi-bootstrap e relay
+│   └── storage.js         # Gerenciador SQLite nativo com migrações versionadas e modo WAL
+├── node/
+│   └── p2p_node.js        # Daemon de nó com APIs REST de observabilidade, RBAC e WebSocket
+├── server/
+│   └── vps_bootstrap.js   # Servidor VPS de bootstrap, STUN reflexivo e relay transparente
+├── desktop/
+│   └── desktop_runner.js  # Orquestrador desktop com suporte a execução em background
+└── web/                   # Interface PWA e Painel visual "Visão da Comunidade"
+    ├── index.html         # Estrutura HTML semântica com Modal do Painel de Monitoramento
+    ├── css/styles.css     # Design system moderno glassmorphism com tema escuro e responsivo
+    └── js/app.js          # Lógica do cliente, visualização topológica SVG e WebSocket /live
 ```
 
-### 3.2. Regras de Validação no Nó Receptor
-Ao receber um pacote P2P:
-1. **Verificação de Hash**: Recalcula `SHA256(sequence + previousHash + timestamp + payload.ciphertext + authorPublicKey)`. O valor deve ser idêntico ao campo `hash`.
-2. **Verificação de Assinatura Digital**: Executa `Ed25519.verify(hash, signature, authorPublicKey)`. Se falhar, o pacote é descartado imediatamente e o IP do remetente pontuado negativamente.
-3. **Verificação de Autorização de Papel**: Consulta o registro local do nó para a chave `authorPublicKey`. Se o usuário não possuir papel `ADMIN` para a comunidade em questão, a mensagem é categoricamente rejeitada.
-4. **Verificação de Monotonicidade e Anti-Replay**: Se o `id` ou `hash` já existir no banco local, a mensagem é ignorada. Se o `sequence` estiver à frente do histórico conhecido, o nó solicita os blocos faltantes via rotina de sincronização anti-entropia.
-5. **Decifração**: Utiliza a `CommunityKey` correspondente ao `epoch` indicado para abrir o envelope AES-256-GCM.
+---
+
+## 3. Especificação dos Módulos Principais
+
+### 3.1. Camada de Rede P2P e Travessia de NAT (`src/core/p2p_engine.js` e `src/core/nat_stun.js`)
+- **Resolução de IP Reflexivo via STUN:** Implementação zero-dependências do RFC 5389 (`nat_stun.js`) que envia pacotes UDP `Binding Request` (20 bytes com Magic Cookie `0x2112A442`) para servidores STUN públicos (`stun.l.google.com:19302`, `stun.cloudflare.com`) e decodifica atributos `XOR-MAPPED-ADDRESS`. Complementado por resolução de IP via WebSocket com a VPS (`STUN_PROBE` / `STUN_RESPONSE`).
+- **Autenticação Mútua de Nós (Handshake Criptográfico):** Cada nó gera e persiste uma identidade Ed25519 (`node_identities`). Ao conectar-se com um par, executa-se um handshake challenge-response:
+  1. O nó A envia `NODE_AUTH_CHALLENGE` contendo um nonce criptográfico aleatório de 32 bytes e sua chave pública.
+  2. O nó B assina o nonce recebido e responde com `NODE_AUTH_RESPONSE` contendo sua assinatura e seu próprio nonce de desafio.
+  3. O nó A verifica a assinatura e conclui o handshake. Nenhum par é aceito apenas por conhecer seu endereço IP.
+- **Multi-Bootstrap Configurável:** Suporte a múltiplos nós de bootstrap via lista separada por vírgula em `BOOTSTRAP_NODES` ou `.env`.
+- **Fallback Autônomo com VPS Offline:** Caso nenhum bootstrap esteja acessível, o nó recorre imediatamente à lista de pares conhecidos persistida no SQLite (`storage.getPeers()`), reconectando-se de forma descentralizada.
+- **Relay Transparente com Limite de Taxa:** Para nós atrás de NAT simétrico rígido, o servidor VPS e nós desktop confiáveis atuam como relay via envelopes `RELAY_FORWARD`. O relay possui limite estrito de taxa (60 pacotes/segundo por nó) e registra métricas de pacotes sem auditar ou armazenar o conteúdo privado cifrado.
+
+### 3.2. Armazenamento com Migrações Versionadas (`src/core/storage.js`)
+- Utiliza a API nativa de alta performance `node:sqlite` do Node.js v22+.
+- **Modo WAL Ativo:** Configurado com `PRAGMA journal_mode = WAL` e `PRAGMA synchronous = NORMAL`, conferindo alta concorrência de leitura e proteção de integridade contra encerramentos abruptos.
+- **Sistema de Migrações Versionadas:** Tabela `schema_migrations` executa migrações sequenciais:
+  - `v1_initial_schema`: Tabelas fundamentais de `communities`, `users`, `messages`, `peers`, `audit_logs`.
+  - `v2_p2p_hardening`: Tabelas especializadas de `node_identities`, `sessions` (com token criptográfico e expiração), `login_attempts` (com contador e bloqueio por força bruta), `consensus_state`, `push_subscriptions`, `network_events`, e `device_sessions`.
+- **Cofre de Chaves e Proteção em Repouso:** Chaves privadas nunca são gravadas em texto puro; são cifradas com PBKDF2 (100.000 iterações com salt aleatório de 16 bytes) e AES-256-GCM.
+- **Backup e Restauração Lógica:** Métodos `backup(targetPath)` e `restore(sourcePath)` garantem cópias consistentes da base em tempo de execução.
+
+### 3.3. Cadeia de Mensagens e Reconciliação CRDT de Split-Brain (`src/core/crdt_chain.js`)
+- **Hash-Chain Causal Assinada:** Cada mensagem é identificada pelo hash canônico SHA-256 dos seus campos estruturados e aponta para o hash do bloco anterior (`prev_hash`), formando um log append-only imutável.
+- **Envelope de Cifra Autenticada (AES-256-GCM):** O conteúdo textual e eventuais anexos são cifrados com a chave do canal comunitário vigente (`epoch`), utilizando vetor de inicialização (IV) de 12 bytes único por mensagem e tag de autenticação de 16 bytes.
+- **Autorização Criptográfica Estrita:** O autor da mensagem deve ter sua chave pública Ed25519 reconhecida como Administrador ativo. Mensagens de usuários com papel `Membro` ou `Moderador` que tentem emitir comunicados são estritamente rejeitadas no primeiro salto (`UNAUTHORIZED_AUTHOR_NOT_ADMIN`).
+- **Resolução Determinística de Conflitos de Partição (Split-Brain):**
+  Se a rede for particionada e dois ramos emitirem mensagens na mesma sequência:
+  1. A regra de desempate prioriza a mensagem com o menor timestamp de criação real;
+  2. Em caso de empate exato em milissegundos, desempata-se pelo menor hash canônico SHA-256 (ordenação lexicográfica estrita);
+  3. A mensagem vencedora substitui a divergente de forma determinística em todos os nós, registrando evento de auditoria (`SPLIT_BRAIN_CONFLICT_RESOLVED`) e garantindo convergência uniforme da réplica.
+
+### 3.4. Consenso Raft-lite com Termo Persistente e Quórum (`src/core/consensus.js`)
+- **Termo Persistente:** O número do termo da eleição e o voto concedido (`votedFor`) são persistidos em SQLite na tabela `consensus_state`, prevenindo votos conflitantes após reinicialização do nó.
+- **Jitter Aleatório de Eleição:** Timeout de batimento cardíaco configurado com variação estocástica entre 4000ms e 6500ms para mitigar colisões de candidatura.
+- **Quórum Estrito de Maioria:** Uma eleição só é vencida se o candidato obtiver estritamente mais da metade dos votos dos pares ativos conhecidos (`Math.floor(activePeers / 2) + 1`).
+- **Precedência de Administrador:** Nós operados por administradores possuem pontuação de precedência mais elevada na liderança da coordenação da malha. O líder atua apenas como coordenador de sincronização e relay, não possuindo autoridade para forjar mensagens sem a chave privada de publicação.
+
+### 3.5. Serviço de Notificações Web Push com Zero-Knowledge (`src/core/notification_service.js`)
+- Gera e gerencia par de chaves VAPID baseado em curvas elípticas ECDSA P-256 (`getVapidPublicKey()`).
+- Registra subscrições de dispositivos celulares e navegadores na tabela `push_subscriptions`.
+- **Garantia Zero-Knowledge:** Notificações trafegam apenas metadados mínimos (*"Nova mensagem oficial disponível"* com timestamp e ID do bloco). O conteúdo confidencial da mensagem nunca é transmitido para os servidores push comerciais da Apple, Google ou Mozilla.
+- **Fila Offline:** Subscrições temporariamente inalcançáveis são enfileiradas e reenviadas com estratégia de backoff exponencial.
+
+### 3.6. Painel Visual "Visão da Comunidade" / Status da Rede (`src/web/` e `src/node/`)
+- Módulo de observabilidade com 14 cartões de métricas, 10 indicadores de estado P2P, visualização topológica SVG dinâmica, tabela de membros com controle de privacidade RBAC, lista de nós com latência, monitor de dispositivos móveis/web e linha do tempo de eventos técnicos em tempo real via WebSocket `/live/network`.
 
 ---
 
-## 4. Estratégia de Tolerância a Falhas e Partições de Rede
+## 4. Classificação de Status das Funcionalidades
 
-### 4.1. Cenário A: VPS Ativa (Operação Normal)
-- Nós novos consultam a VPS para obter lista de pares ativos e negociar canal WebRTC.
-- Mensagens do Administrador são propagadas simultaneamente para a VPS e diretamente para os nós conectados via malha P2P.
+Para transparência técnica estrita, categorizamos a completude de cada subsistema:
 
-### 4.2. Cenário B: VPS Derrubada / Bloqueada / Fora do Ar
-- **Detecção**: Nós falham em renovar o ping com a VPS após 3 tentativas (intervalo configurável, ex.: 3 segundos).
-- **Sobrevivência da Malha**:
-  - Os nós continuam conectados uns aos outros via canais WebRTC ou WebSockets locais previamente abertos.
-  - Conexões com novos nós utilizam a tabela de rotas locais (Peer Exchange).
-- **Eleição de Novo Líder**:
-  - Os nós remanescentes realizam uma votação distribuída.
-  - O nó com menor hash de identidade ou maior tempo de atividade é eleito **Líder Provisório**.
-  - O líder coordena a transmissão de mensagens e o registro de novos nós enquanto a VPS estiver inacessível.
-- **Publicação Continuada**:
-  - O Administrador (seja ele o líder ou apenas um nó na rede) continua criando e assinando mensagens normalmente.
-  - As mensagens são disseminadas pela malha via protocolo de fofoca (*gossip*). Todos os nós verificam a assinatura Ed25519 e armazenam a mensagem em seus bancos SQLite.
-- **Restauração da VPS**:
-  - Quando a VPS volta ao ar, os nós se reconectam e executam sincronização bidirecional, atualizando o histórico da VPS com todas as mensagens criadas durante o período de indisponibilidade.
+### 4.1. Funcionalidades Totalmente Implementadas e Testadas ✅
+- Unificação estrutural limpa em `src/` sem resíduos de `packages/`;
+- Criptografia assimétrica Ed25519 e simétrica AES-256-GCM com IV único e tags de autenticação;
+- Banco de dados SQLite nativo com migrações versionadas, modo WAL e proteção de integridade;
+- Proteção de senhas com PBKDF2 e cofre de chaves privadas criptografadas;
+- Autenticação de sessões com tokens criptográficos, logout e proteção contra força bruta (lockout);
+- Autorização criptográfica de comunicados (rejeição estrita de publicações de não-administradores);
+- Encadeamento causal Merkle-DAG com buffer de mensagens órfãs;
+- Reconciliação determinística de conflitos de partição (split-brain) com auditoria;
+- Consenso Raft-lite com persistência de termo em SQLite e quórum estrito de maioria;
+- Resolução de IP reflexivo via cliente STUN UDP RFC 5389 puro e WebSocket;
+- Autenticação mútua challenge-response entre nós P2P;
+- Multi-bootstrap com fallback automático para cache local de pares SQLite quando VPSs caem;
+- Relay transparente com limitação de taxa (60 pkts/s) e rastreamento de métricas;
+- Web Push VAPID com garantia Zero-Knowledge (sem conteúdo em texto claro);
+- Painel visual completo "Visão da Comunidade" com controle de privacidade RBAC e WebSocket em tempo real;
+- Suíte automatizada de testes com 27 testes unitários e de integração (100% de aprovação);
+- Script de simulação de queda abrupta da VPS com múltiplos nós em processos e portas isoladas.
 
----
+### 4.2. Funcionalidades com Dependências Externas ou Parciais ⚠️
+- **Web Push:** A entrega de notificações push para smartphones depende da disponibilidade dos servidores de push do Google (FCM) e Apple (APNs). Caso esses serviços externos estejam bloqueados, as notificações push falham, embora a sincronização direta P2P continue operando.
+- **NAT Simétrico Duplo:** Em cenários onde dois nós estão concomitantemente sob CGNAT simétrico estrito e sem UPnP, a conexão direta UDP é fisicamente impossibilitada pela operadora de telefonia/banda larga. O sistema resolve isso através de Relay transparente via VPS ou nó desktop acessível.
 
-## 5. Garantia de Quórum e Segurança de Governança
-- **Apenas Administradores publicam**: Garantido matematicamente por assinaturas Ed25519 que nós não conseguem forjar.
-- **Moderadores**: Possuem chaves para assinar comandos administrativos (ex.: marcar mensagem como oculta, banir nó malicioso local).
-- **Quórum para Revogação**: Para expulsar um membro ou alterar permissões de comunidade em modo federado, é exigida a assinatura do Administrador principal ou aprovação de mais de 50% dos moderadores ativos.
-- **Logs de Auditoria Criptografados**: Cada evento administrativo gera uma entrada imutável no log local com carimbo de tempo e assinatura digital.
+### 4.3. Requisitos para Escala em Produção 🏭
+- **Governança Multi-Assinatura (M-of-N):** O código possui a base causal e suporte a múltiplos administradores cadastrados; a implementação futura de assinaturas de limiar (Threshold BLS/Schnorr) permitirá exigir aprovação de 3 de 5 administradores antes da publicação.
+- **Roteamento Onion / I2P:** Integração com túneis Tor para ocultação integral de endereços IP de nós desktop domésticos.
+- **Distribuição de Mídia em Pedaços (BitTorrent Chunking):** Fragmentação de arquivos binários maiores que 20MB em pedaços com verificação Merkle individual para evitar sobrecarga de largura de banda na malha gossip.

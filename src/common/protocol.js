@@ -25,7 +25,15 @@ const MessageType = {
   KEY_ROTATION: 'KEY_ROTATION',           // Notificação de nova época de chave criptográfica
   
   // Relay / Fallback
-  RELAY_FORWARD: 'RELAY_FORWARD'          // Encapsulamento de mensagem via nó intermediário
+  RELAY_FORWARD: 'RELAY_FORWARD',         // Encapsulamento de mensagem via nó intermediário
+
+  // NAT Traversal & Descoberta de IP Reflexivo (STUN)
+  STUN_PROBE: 'STUN_PROBE',               // Sondagem de IP reflexivo/público e tipo de NAT
+  STUN_RESPONSE: 'STUN_RESPONSE',         // Resposta com endereço externo e porta descoberta
+
+  // Autenticação Mútua de Nós (Ed25519)
+  NODE_AUTH_CHALLENGE: 'NODE_AUTH_CHALLENGE', // Desafio criptográfico com nonce para autenticação de nó
+  NODE_AUTH_RESPONSE: 'NODE_AUTH_RESPONSE'    // Resposta assinada com a chave privada do nó
 };
 
 class ProtocolPacket {

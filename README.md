@@ -1,27 +1,28 @@
 # Comunidade Resiliente 🛡️📡
 
-> **Sistema Descentralizado P2P de Comunidades e Canais de Mensagens Imune a Quedas de Servidor e Censura**
+> **Sistema P2P Descentralizado de Comunidades e Canais Oficiais com Resiliência a Quedas de Servidor**
 
-[![Node.js](https://img.shields.io/badge/Node.js-v22%2B-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-v22.5%2B-green.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![P2P: Mesh & WebRTC](https://img.shields.io/badge/P2P-Mesh%20%26%20WebSockets-orange.svg)]()
-[![Security: E2EE Ed25519 + AES-256-GCM](https://img.shields.io/badge/Security-Ed25519%20%2B%20AES--256--GCM-red.svg)]()
+[![P2P: Mesh & WebSockets](https://img.shields.io/badge/P2P-Mesh%20%26%20RFC%205389%20STUN-orange.svg)]()
+[![Security: Ed25519 + AES-256-GCM](https://img.shields.io/badge/Security-Ed25519%20%2B%20AES--256--GCM-red.svg)]()
+[![Tests: 27/27 Passing](https://img.shields.io/badge/Tests-27%2F27%20Passed-brightgreen.svg)]()
 
-O **Comunidade Resiliente** é uma plataforma inovadora de comunicação comunitária onde **apenas administradores autorizados possuem a capacidade de publicar comunicados oficiais**, e **todos os membros recebem as mensagens diretamente em seus computadores e celulares**.
+O **Comunidade Resiliente** é uma plataforma inovadora de comunicação comunitária onde **apenas administradores autorizados possuem a capacidade criptográfica de assinar e publicar comunicados oficiais**, e **todos os membros recebem as mensagens diretamente em seus computadores e celulares**.
 
-O grande diferencial do sistema é sua **arquitetura de sobrevivência radical**: se a VPS ou o servidor central for bloqueado, apreendido ou desligado abruptamente, a rede não cai. Os computadores pessoais dos membros assumem a operação como nós P2P autônomos, elegem dinamicamente um novo líder e continuam sincronizando mensagens de forma direta e ininterrupta.
+O grande diferencial do sistema é sua **arquitetura de sobrevivência radical**: se a VPS ou o servidor central for bloqueado, apreendido ou desligado abruptamente, a rede não cai. Os computadores pessoais dos membros assumem a operação como nós P2P autônomos, recuperam a lista de pares conhecida no banco local SQLite, elegem dinamicamente um novo líder e continuam sincronizando mensagens de forma direta e ininterrupta.
 
 ---
 
 ## 📑 Índice
 1. [Principais Características](#-principais-características)
-2. [Arquitetura do Sistema](#-arquitetura-do-sistema)
-3. [Segurança e Criptografia](#-segurança-e-criptografia)
-4. [Entregáveis Cumpridos](#-entregáveis-cumpridos)
-5. [Início Rápido](#-início-rápido)
+2. [Painel Visual "Visão da Comunidade"](#-painel-visual-visão-da-comunidade)
+3. [Arquitetura do Sistema](#-arquitetura-do-sistema)
+4. [Segurança e Criptografia](#-segurança-e-criptografia)
+5. [Início Rápido com 1 Clique](#-início-rápido-com-1-clique-usuários-leigos)
 6. [Simulação de Queda da VPS](#-simulação-de-queda-da-vps)
 7. [Execução em Cluster Local](#-execução-em-cluster-local)
-8. [Docker Compose](#-docker-compose)
+8. [Docker Compose com Multi-Bootstrap](#-docker-compose-com-multi-bootstrap)
 9. [Suíte de Testes Automatizados](#-suíte-de-testes-automatizados)
 10. [Documentação Detalhada](#-documentação-detalhada)
 
@@ -29,48 +30,67 @@ O grande diferencial do sistema é sua **arquitetura de sobrevivência radical**
 
 ## 🚀 Principais Características
 
-- **Topologia Híbrida e Resiliente:** A VPS é apenas um ponto opcional de bootstrap inicial e sinalização STUN. A rede opera 100% de nó para nó.
+- **Topologia Híbrida e Resiliente:** A VPS atua apenas como ponto de bootstrap inicial e relay transparente opcional. A rede opera com conexões diretas P2P entre computadores pessoais.
 - **Canal Oficial Unidirecional:** Apenas administradores com chave privada Ed25519 legítima conseguem assinar mensagens. Membros comuns e moderadores têm permissão estrita de leitura e retransmissão P2P.
-- **Eleição Autônoma de Líder:** Algoritmo Bully/Raft-lite integrado. Na ausência de sinal da VPS, os nós online elegem o líder da malha em menos de 3 segundos.
-- **Armazenamento Seguro em Disco:** Banco de dados SQLite persistente em cada computador pessoal (utilizando a nova API nativa de alto desempenho `node:sqlite`).
-- **Criptografia Ponta a Ponta (E2EE):** Conteúdos e anexos são cifrados com AES-256-GCM. Provedores e intermediários de rede não conseguem ler o conteúdo.
-- **Rotação de Chaves (Key Rotation):** Quando um membro é expulso, o sistema rotaciona a chave da comunidade gerando uma nova época criptográfica (*Forward Secrecy*).
-- **Interface Web/PWA Moderna:** Tema escuro com telemetria em tempo real, indicador de nós online, alerta dinâmico de status da VPS e suporte a instalação como app no celular e desktop.
-- **Push Notifications com Privacidade (Zero-Knowledge):** O corpo da mensagem confidencial nunca é enviado em texto claro por servidores de push abertos (Google FCM ou Apple APNs).
+- **Resolução de NAT STUN RFC 5389:** Cliente puro em JavaScript de descoberta de IP reflexivo (UDP) para travessia de roteadores domésticos.
+- **Multi-Bootstrap e Fallback Autônomo:** Suporte a múltiplos servidores de semente configuráveis via `.env` (`BOOTSTRAP_NODES`). Se todas as VPSs caírem, os nós recorrem automaticamente à tabela de pares salva no SQLite local.
+- **Eleição Autônoma de Líder (Raft-lite):** Algoritmo de consenso com persistência de termo no SQLite, voto único, variação estocástica (jitter) de 4000 a 6500ms e quórum estrito da maioria (`Math.floor(n/2) + 1`).
+- **Reconciliação CRDT de Split-Brain:** Resolução determinística de divergências de sequência caso a rede se divida, garantindo convergência idêntica em todos os nós sem perda de integridade.
+- **Armazenamento Seguro SQLite com WAL:** Banco de dados persistente em cada máquina pessoal utilizando `node:sqlite` nativo com migrações versionadas e cofre de chaves cifrado com PBKDF2 e salt aleatório.
+- **Criptografia Autenticada (AES-256-GCM):** Conteúdos e anexos cifrados com chave comunitária por época. Provedores e intermediários enxergam apenas ciphertext ilegível.
+- **Web Push VAPID Zero-Knowledge:** Notificações para navegadores e celulares sem enviar o conteúdo confidencial da mensagem por provedores de nuvem abertos.
+- **Painel Visual "Visão da Comunidade":** Monitoramento em tempo real do estado da rede, participantes, topologia interativa e métricas técnicas sem expor dados privados.
+
+---
+
+## 📊 Painel Visual "Visão da Comunidade"
+
+A aplicação conta com um painel integrado de observabilidade da rede, acessível no cabeçalho pelo botão **"🌐 Visão da Rede"**:
+
+- **14 Cartões de Métricas:** Nós online, nós conhecidos, celulares, páginas web, membros, administradores, moderadores, mensagens sincronizadas, estado da VPS, estado P2P, líder atual, última sincronização e conexões diretas vs relay;
+- **10 Indicadores de Estado:** Diagnóstico em tempo real de STUN, Relay, Consenso, Quórum, Sincronização e Erros;
+- **Mapa da Rede Interativo (SVG):** Topologia visual com código de cores (Verde: Direto, Azul: Relay, Cinza: Offline, Vermelho: Erro);
+- **Lista de Participantes com Privacidade RBAC:** Membros comuns visualizam apenas dados agregados e seu próprio perfil; administradores visualizam informações operacionais completas;
+- **Diferenciação Estrita de Entidades:** Não confunde Usuário, Dispositivo, Sessão e Nó P2P;
+- **Atualização em Tempo Real:** Conexão contínua via WebSocket `/live/network` atualizando métricas e linha do tempo de eventos técnicos.
+
+Para a especificação completa de privacidade e cálculo dos indicadores, consulte [`docs/network_dashboard.md`](docs/network_dashboard.md).
 
 ---
 
 ## 🏛️ Arquitetura do Sistema
 
 ```
-                      +-----------------------------+
-                      |      VPS Bootstrap /        |
-                      |      Signaling Relay        |
-                      |  (OPCIONAL / TEMPORÁRIO)    |
-                      +--------------+--------------+
-                                     |
-               (Descoberta inicial e STUN/TURN fallback)
-                                     |
-          +--------------------------+--------------------------+
-          |                                                     |
-          v                                                     v
-+-------------------+                                 +-------------------+
-|   Nó Desktop A    |<============== P2P =============>|   Nó Desktop B    |
-|   (Administrador) |       (WebRTC / Direct TCP/WS)   |   (Moderador)     |
-| - SQLite Cifrado  |                                 | - SQLite Cifrado  |
-| - Chave Ed25519   |                                 | - Validador DAG   |
-+---------+---------+                                 +---------+---------+
-          ^                                                     ^
-          |                        P2P                          |
-          +=====================================================+
-                                   |
-                                   v
-                         +-------------------+
-                         |   Nó Desktop C    |
-                         |   (Membro)        |
-                         | - SQLite Cifrado  |
-                         | - Leitor Cifrado  |
-                         +-------------------+
+                      +----------------------------------------+
+                      |   VPS Bootstrap 1 & 2 (Multi-Seed)     |
+                      |   - STUN Reflexivo (RFC 5389 / WS)     |
+                      |   - Relay Transparente (Rate-Limited)  |
+                      |   (OPCIONAL / DISPENSÁVEL APÓS PEERING)|
+                      +-------------------+--------------------+
+                                          |
+                        [Descoberta Inicial & STUN / Relay]
+                                          |
+              +---------------------------+---------------------------+
+              |                                                       |
+              v                                                       v
+    +-------------------+                                   +-------------------+
+    |   Nó Desktop A    |<============= P2P Mesh ===========>|   Nó Desktop B    |
+    |   (Administrador) |     (Direct TCP / WebSocket Mesh) |   (Moderador)     |
+    | - SQLite WAL      |                                   | - SQLite WAL      |
+    | - Chave Ed25519   |                                   | - Validador CRDT  |
+    | - Painel Visão    |                                   | - Painel Visão    |
+    +---------+---------+                                   +---------+---------+
+              ^                                                       ^
+              |                        P2P                            |
+              +=======================================================+
+                                       |
+                                       v
+                             +-------------------+
+                             |   Nó Desktop C    |
+                             |   (Membro Comum)  |
+                             | - SQLite WAL      |
+                             | - Replicador Mesh |
+                             +---------+---------+
 ```
 
 Para a especificação técnica detalhada, consulte [`docs/architecture.md`](docs/architecture.md).
@@ -79,56 +99,37 @@ Para a especificação técnica detalhada, consulte [`docs/architecture.md`](doc
 
 ## 🔒 Segurança e Criptografia
 
-- **Assinaturas Digitais (Ed25519):** Cada bloco de mensagem possui um hash SHA-256 canônico assinado com a chave Ed25519 do autor.
-- **Cadeia de Blocos Causal (Signed Hash Chain / Merkle-DAG):** Cada bloco aponta para o `prev_hash` anterior, impedindo que mensagens antigas sejam deletadas ou modificadas sem invalidar todo o histórico.
-- **Anti-Replay e Anti-Duplicação:** Cache de nãoces e hashes SHA-256 com verificação de sequência monotônica.
-- **Cofre Local (Local Key Vault):** Chaves privadas no disco do computador são cifradas com derivação de senha mestre PBKDF2 com salt aleatório e 100.000 iterações.
-- **Auditoria Criptográfica Imutável:** Todos os eventos da rede (eleições, rotação de chaves, revogações, conexões) são gravados em uma cadeia imutável auditável.
+- **Assinaturas Digitais (Ed25519):** Cada bloco possui hash SHA-256 canônico assinado com a chave do autor.
+- **Cadeia de Blocos Causal (Signed Hash-Chain / Merkle-DAG):** Cada bloco aponta para `prev_hash`, impedindo exclusão ou modificação retroativa.
+- **Autenticação Mútua de Nós:** Handshake challenge-response com nonces aleatórios assinados.
+- **Proteção contra Força Bruta:** Bloqueio temporário (15 minutos) após 5 tentativas de senha incorretas.
+- **Sessões Criptográficas:** Tokens aleatórios seguros de 32 bytes gerados via CSPRNG com expiração e endpoint de logout.
+- **Cofre Local Criptografado:** Chaves privadas protegidas por derivação PBKDF2 com salt aleatório e 100.000 iterações.
+- **Auditoria Criptográfica:** Todos os eventos da rede (eleições, rotação de chaves, revogações, conexões) são gravados em cadeia auditável imutável.
 
 ---
 
-## 📦 Entregáveis Cumpridos
+## 💻 Início Rápido com 1 Clique (Usuários Leigos)
 
-| # | Entregável Requisitado | Status | Arquivo / Módulo de Referência |
-| :--- | :--- | :---: | :--- |
-| **1** | Arquitetura completa do sistema | ✅ Concluído | [`docs/architecture.md`](docs/architecture.md) |
-| **2** | Código funcional de um MVP | ✅ Concluído | [`src/core/`](src/core/), [`src/node/`](src/node/) |
-| **3** | Aplicação desktop como nó P2P | ✅ Concluído | [`src/desktop/desktop_runner.js`](src/desktop/desktop_runner.js) |
-| **4** | Interface web/PWA para usuários | ✅ Concluído | [`src/web/index.html`](src/web/index.html), [`src/web/js/app.js`](src/web/js/app.js) |
-| **5** | API de autenticação e administração | ✅ Concluído | Endpoints `/api/auth/*` e `/api/admin/*` em [`src/node/p2p_node.js`](src/node/p2p_node.js) |
-| **6** | Sincronização de mensagens entre 3 nós | ✅ Concluído | Verificado na simulação e suíte de testes |
-| **7** | Simulação de desligamento da VPS | ✅ Concluído | [`scripts/simulate_vps_kill.js`](scripts/simulate_vps_kill.js) |
-| **8** | Recuperação automática com nós restantes | ✅ Concluído | Eleição de líder Bully/Raft em [`src/core/consensus.js`](src/core/consensus.js) |
-| **9** | Documentação de instalação | ✅ Concluído | [`INSTALLATION.md`](INSTALLATION.md) |
-| **10** | Docker Compose para ambiente local | ✅ Concluído | [`docker-compose.yml`](docker-compose.yml) e [`Dockerfile`](Dockerfile) |
-| **11** | Testes automatizados (16/16 passando) | ✅ Concluído | [`scripts/run_tests.js`](scripts/run_tests.js) |
-| **12** | Documento de limitações e segurança | ✅ Concluído | [`docs/security_and_limitations.md`](docs/security_and_limitations.md) |
+### 🪟 No Windows:
+- Dê um **duplo-clique no arquivo `INSTALAR-WINDOWS.bat`** na raiz da pasta.
+- O instalador configura a aplicação em `%LocalAppData%\ComunidadeResiliente`, cria os atalhos na Área de Trabalho e Menu Iniciar, e abre o navegador automaticamente!
 
----
-
-## 💻 Instalador com 1 Clique (Para Usuários Leigos)
-
-Para que qualquer pessoa instale e use o sistema sem precisar abrir terminal ou ter conhecimento técnico:
-
-### 🪟 Windows:
-- Basta dar um **duplo-clique no arquivo `INSTALAR-WINDOWS.bat`** na raiz do projeto.
-- O instalador configura a aplicação em `%LocalAppData%\ComunidadeResiliente`, cria o atalho **"Comunidade Resiliente"** na Área de Trabalho e no Menu Iniciar, e abre a interface no navegador automaticamente!
-- Para desinstalar, basta clicar no atalho *"Desinstalar Comunidade Resiliente"* no Menu Iniciar.
-
-### 🐧 Linux / 🍎 macOS:
-- Execute `./install.sh` para instalar localmente e criar os atalhos de aplicativo.
+### 🐧 No Linux / 🍎 macOS:
+- Execute `./install.sh` no terminal para criar os inicializadores no sistema.
 
 ---
 
 ## ⚡ Início Rápido (Desenvolvedores)
 
-### Instalação das Dependências:
 ```bash
+# Instalar dependências
 npm install
-```
 
-### Executar a Suíte de Testes Automatizados (16 testes unitários e de integração):
-```bash
+# Copiar arquivo de variáveis de ambiente
+cp .env.example .env
+
+# Executar suíte de testes automatizados (27 testes)
 npm test
 ```
 
@@ -136,19 +137,19 @@ npm test
 
 ## 💥 Simulação de Queda da VPS
 
-Para testar a sobrevivência P2P automatizada:
+Para testar a sobrevivência P2P automatizada com múltiplos processos e portas isoladas:
 ```bash
 npm run simulate:kill
 ```
 O script executa em sequência:
-1. Inicia a VPS Bootstrap na porta `4001` e 3 nós P2P (Alice Admin, Bob Moderador, Carlos Membro).
-2. Alice publica o Comunicado #1 enquanto a VPS está ativa.
-3. **Desliga abruptamente a VPS central.**
-4. Os 3 nós detectam a queda e elegem Alice como novo líder autônomo.
-5. Alice publica o Comunicado #2 de emergência com a VPS **totalmente morta**.
-6. Bob e Carlos recebem e decifram a mensagem 100% através da malha P2P direta.
-7. Valida rejeição estrita de mensagens falsificadas de não-administradores.
-8. Executa e valida a rotação de chaves comunitárias.
+1. Inicia a VPS Bootstrap na porta `4901` e 3 nós P2P (Alice Admin, Bob Moderador, Carlos Membro);
+2. Alice publica o Comunicado #1 enquanto a VPS está ativa;
+3. **A VPS central é abruptamente encerrada e desligada;**
+4. Os 3 nós detectam a queda e recuperam a lista de pares pelo cache local SQLite;
+5. Elegem autonomamente o líder do termo Raft-lite;
+6. Alice publica o Comunicado #2 de emergência com a VPS **completamente desligada**;
+7. Bob e Carlos recebem e decifram a mensagem 100% através da malha direta P2P;
+8. Valida rejeição estrita de mensagens forjadas de não-administradores e rotação de chaves.
 
 ---
 
@@ -160,29 +161,52 @@ npm run cluster
 ```
 URLs disponíveis:
 - **VPS Bootstrap:** `http://localhost:4001/status` (WS: `ws://127.0.0.1:4001`)
-- **Nó 1 (Alice - Administradora):** `http://localhost:5001` *(possui permissão de publicação)*
-- **Nó 2 (Bob - Moderador):** `http://localhost:5002` *(somente leitura / moderação)*
-- **Nó 3 (Carlos - Membro):** `http://localhost:5003` *(somente leitura e relay)*
+- **Nó 1 (Alice - Administradora):** `http://localhost:5001` *(publicação autorizada)*
+- **Nó 2 (Bob - Moderador):** `http://localhost:5002` *(somente leitura e moderação)*
+- **Nó 3 (Carlos - Membro):** `http://localhost:5003` *(somente leitura e replicação)*
 
 ---
 
-## 🐳 Docker Compose
+## 🐳 Docker Compose com Multi-Bootstrap
 
-Para rodar todo o ecossistema em contêineres Docker isolados:
+Para subir o ambiente completo em contêineres Docker isolados com alta disponibilidade:
 ```bash
 docker compose up --build
 ```
-Para encerrar a VPS simulando a queda via Docker:
+O ecossistema inicializa duas instâncias redundantes de bootstrap (`vps-bootstrap-1` na 4001 e `vps-bootstrap-2` na 4002) e 3 nós desktop com volumes persistentes.
+
+Para simular a queda de todas as VPSs via Docker:
 ```bash
-docker compose stop vps-bootstrap
+docker compose stop vps-bootstrap-1 vps-bootstrap-2
 ```
-Os nós Alice, Bob e Carlos continuarão conectados na rede bridge Docker trocando mensagens normalmente.
+Os nós continuarão trocando mensagens através da rede P2P sem qualquer interrupção.
+
+---
+
+## 🧪 Suíte de Testes Automatizados
+
+A suíte cobre 9 módulos com 27 testes unitários e de integração:
+- **Módulo 1:** Primitivas criptográficas (Ed25519, AES-256-GCM, PBKDF2 e cofre local);
+- **Módulo 2:** Armazenamento SQLite com migrações versionadas, modo WAL e sessões;
+- **Módulo 3:** Cadeia causal de mensagens, rejeição de não-admins e reconciliação CRDT de split-brain;
+- **Módulo 4:** Consenso Raft-lite com termo persistente e quórum estrito de maioria;
+- **Módulo 5:** Notificações Web Push com garantia Zero-Knowledge e chaves VAPID;
+- **Módulo 6:** Resolução de NAT e cliente STUN RFC 5389;
+- **Módulo 7:** Autenticação mútua challenge-response entre nós P2P;
+- **Módulo 8:** Proteção contra força bruta e bloqueio de conta (lockout);
+- **Módulo 9:** Painel "Visão da Comunidade", anonimização e eventos técnicos.
+
+Para rodar:
+```bash
+npm test
+```
 
 ---
 
 ## 📚 Documentação Detalhada
 
-- 📘 [Manual do Usuário e Instalação](INSTALLATION.md)
+- 📘 [Manual de Instalação e Operação](INSTALLATION.md)
+- 📊 [Documentação do Painel "Visão da Comunidade"](docs/network_dashboard.md)
 - 📐 [Especificação Completa da Arquitetura](docs/architecture.md)
 - 🛡️ [Segurança, Modelo de Ameaças e Limitações](docs/security_and_limitations.md)
 

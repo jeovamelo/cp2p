@@ -1,12 +1,14 @@
 /**
  * Comunidade Resiliente - Runtime Completo do Nó P2P Pessoal
  * Executado localmente em cada computador membro.
- * Integra: Storage SQLite, Crypto, Chain CRDT, P2P Engine, Notificações e Servidor Web Local para UI/PWA.
+ * Integra: Storage SQLite em WAL, Crypto Ed25519/AES-256-GCM, Chain CRDT,
+ * P2P Engine com NAT/STUN/Relay, Consenso Raft-lite, Notificações VAPID e Servidor Web Local para UI/PWA.
  */
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const CryptoEngine = require('../common/crypto');
 const StorageManager = require('../core/storage');
@@ -49,7 +51,7 @@ class P2PNode {
 
     this.p2p = new P2PEngine({
       nodeId: this.nodeId,
-      host: '127.0.0.1',
+      host: '0.0.0.0',
       p2pPort: this.p2pPort,
       bootstrapNodes: this.bootstrapNodes,
       storage: this.storage,
@@ -73,6 +75,7 @@ class P2PNode {
         type: 'NEW_MESSAGE',
         message: this.formatMessageForUI(msg)
       });
+      this.broadcastNetworkUpdate();
     });
 
     this.p2p.on('peer_connected', (peer) => {
@@ -82,6 +85,7 @@ class P2PNode {
         peer,
         networkStatus: this.p2p.getNetworkStatus()
       });
+      this.broadcastNetworkUpdate();
     });
 
     this.p2p.on('peer_disconnected', (peer) => {
@@ -91,6 +95,7 @@ class P2PNode {
         peer,
         networkStatus: this.p2p.getNetworkStatus()
       });
+      this.broadcastNetworkUpdate();
     });
 
     this.p2p.on('leader_change', (leaderData) => {
@@ -99,6 +104,7 @@ class P2PNode {
         leaderData,
         networkStatus: this.p2p.getNetworkStatus()
       });
+      this.broadcastNetworkUpdate();
     });
 
     this.p2p.on('vps_status_change', (vpsData) => {
@@ -107,6 +113,7 @@ class P2PNode {
         vpsData,
         networkStatus: this.p2p.getNetworkStatus()
       });
+      this.broadcastNetworkUpdate();
     });
 
     this.notificationService.on('push', (notif) => {
@@ -156,7 +163,8 @@ class P2PNode {
       let user = this.storage.getUserByUsername(this.config.username);
       if (!user) {
         const keypair = CryptoEngine.generateEd25519KeyPair();
-        const password = this.config.password || 'senha123';
+        // Não utiliza senhas estáticas fracas em produção
+        const password = this.config.password || crypto.randomBytes(8).toString('hex');
         const passwordHash = CryptoEngine.hashPassword(password);
         const encryptedPrivKey = CryptoEngine.encryptPrivateKey(keypair.privateKey, password);
 
@@ -181,10 +189,12 @@ class P2PNode {
         this.activePrivateKeyPem = keypair.privateKey;
       } else {
         this.currentUser = user;
-        try {
-          const encObj = JSON.parse(user.encrypted_private_key);
-          this.activePrivateKeyPem = CryptoEngine.decryptPrivateKey(encObj, this.config.password || 'senha123');
-        } catch (e) {}
+        if (this.config.password) {
+          try {
+            const encObj = JSON.parse(user.encrypted_private_key);
+            this.activePrivateKeyPem = CryptoEngine.decryptPrivateKey(encObj, this.config.password);
+          } catch (e) {}
+        }
       }
     }
   }
@@ -197,13 +207,37 @@ class P2PNode {
 
       this.uiWss = new WebSocket.Server({ noServer: true });
       this.httpServer.on('upgrade', (req, socket, head) => {
-        if (req.url === '/live') {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        if (url.pathname === '/live' || url.pathname === '/live/network') {
           this.uiWss.handleUpgrade(req, socket, head, (ws) => {
             this.uiClients.add(ws);
-            ws.on('close', () => this.uiClients.delete(ws));
+
+            // Rastreamento seguro do dispositivo (Prompt 2)
+            const ua = (req.headers['user-agent'] || '').toLowerCase();
+            const isMobile = /mobile|android|iphone|ipad/i.test(ua);
+            const deviceType = isMobile ? 'mobile' : 'desktop';
+            const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+            ws.sessionId = sessionId;
+
+            this.storage.registerDeviceSession({
+              sessionId,
+              userId: this.currentUser ? this.currentUser.id : null,
+              deviceType,
+              clientType: url.pathname === '/live/network' ? 'dashboard' : 'app',
+              isRelay: false
+            });
+
+            ws.on('close', () => {
+              this.uiClients.delete(ws);
+              this.storage.removeDeviceSession(sessionId);
+              this.broadcastNetworkUpdate();
+            });
+
+            // Envia estado inicial
             ws.send(JSON.stringify({
               type: 'INIT_STATE',
               networkStatus: this.p2p.getNetworkStatus(),
+              networkOverview: this.p2p.getNetworkOverview(),
               user: this.currentUser ? {
                 id: this.currentUser.id,
                 username: this.currentUser.username,
@@ -211,6 +245,8 @@ class P2PNode {
                 publicKey: this.currentUser.public_key
               } : null
             }));
+
+            this.broadcastNetworkUpdate();
           });
         } else {
           socket.destroy();
@@ -223,8 +259,16 @@ class P2PNode {
     });
   }
 
+  broadcastNetworkUpdate() {
+    this.broadcastToUI({
+      type: 'NETWORK_OVERVIEW',
+      overview: this.p2p.getNetworkOverview(),
+      events: this.storage.getRecentNetworkEvents(20)
+    });
+  }
+
   async handleHttpRequest(req, res) {
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
 
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -238,13 +282,13 @@ class P2PNode {
     }
 
     if (pathname.startsWith('/api/')) {
-      return this.handleApiRoute(pathname, req, res);
+      return this.handleApiRoute(pathname, url, req, res);
     }
 
     this.serveStaticFile(pathname, res);
   }
 
-  async handleApiRoute(pathname, req, res) {
+  async handleApiRoute(pathname, url, req, res) {
     const sendJson = (statusCode, data) => {
       res.writeHead(statusCode, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));
@@ -264,7 +308,24 @@ class P2PNode {
       });
     };
 
+    // Auxiliar para extrair usuário da sessão
+    const getSessionUser = () => {
+      const authHeader = req.headers['authorization'];
+      if (!authHeader) return this.currentUser;
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      const session = this.storage.getSession(token);
+      if (session) {
+        return {
+          id: session.user_id,
+          username: session.username,
+          role: session.role
+        };
+      }
+      return this.currentUser;
+    };
+
     try {
+      // 1. Status Geral do Nó
       if (pathname === '/api/status' && req.method === 'GET') {
         const comm = this.storage.getCommunity('geral');
         return sendJson(200, {
@@ -274,6 +335,7 @@ class P2PNode {
           p2pPort: this.p2pPort,
           community: comm,
           network: this.p2p.getNetworkStatus(),
+          networkOverview: this.p2p.getNetworkOverview(),
           user: this.currentUser ? {
             id: this.currentUser.id,
             username: this.currentUser.username,
@@ -284,12 +346,25 @@ class P2PNode {
         });
       }
 
+      // 2. Autenticação e Registro com Sessões Reais e Rate Limiting
       if (pathname === '/api/auth/register' && req.method === 'POST') {
         const { username, password, role } = await getBody();
         if (!username || !password) return sendJson(400, { error: 'Usuário e senha são obrigatórios' });
 
         const existing = this.storage.getUserByUsername(username);
         if (existing) return sendJson(409, { error: 'Nome de usuário já em uso' });
+
+        // Regra de Segurança: Membros comuns não podem se registrar diretamente como 'Administrador'
+        const allUsers = this.storage.getAllUsers();
+        const hasAdmins = allUsers.some(u => u.role === 'Administrador');
+
+        if (role === 'Administrador' && hasAdmins) {
+          return sendJson(403, {
+            error: 'O papel de Administrador só pode ser concedido por um administrador já ativo através de promoção assinada.'
+          });
+        }
+
+        const effectiveRole = hasAdmins ? (role === 'Administrador' ? 'Membro' : (role || 'Membro')) : 'Administrador';
 
         const keypair = CryptoEngine.generateEd25519KeyPair();
         const passwordHash = CryptoEngine.hashPassword(password);
@@ -301,7 +376,7 @@ class P2PNode {
           password_hash: passwordHash,
           public_key: keypair.publicKey,
           encrypted_private_key: JSON.stringify(encryptedPrivKey),
-          role: role || 'Membro',
+          role: effectiveRole,
           status: 'active',
           created_at: Date.now()
         };
@@ -312,21 +387,53 @@ class P2PNode {
         this.p2p.role = newUser.role;
         this.p2p.consensus.role = newUser.role;
 
+        // Cria sessão persistente com expiração (24 horas)
+        const token = crypto.randomBytes(32).toString('hex');
+        this.storage.createSession({
+          token,
+          userId: newUser.id,
+          username: newUser.username,
+          role: newUser.role,
+          expiresAt: Date.now() + (24 * 3600 * 1000)
+        });
+
         this.auditLogger.log('USER_REGISTERED', newUser.public_key, { username, role: newUser.role });
 
         return sendJson(201, {
           success: true,
+          token,
           user: { id: newUser.id, username: newUser.username, role: newUser.role, publicKey: newUser.public_key }
         });
       }
 
       if (pathname === '/api/auth/login' && req.method === 'POST') {
         const { username, password } = await getBody();
+        if (!username || !password) return sendJson(400, { error: 'Usuário e senha são obrigatórios' });
+
+        // Proteção contra força bruta
+        const lockout = this.storage.getLoginLockout(username);
+        if (lockout.isLocked) {
+          return sendJson(429, {
+            error: `Conta temporariamente bloqueada por excesso de tentativas. Tente novamente em ${lockout.remainingSecs} segundos.`
+          });
+        }
+
         const user = this.storage.getUserByUsername(username);
-        if (!user) return sendJson(401, { error: 'Usuário não encontrado' });
+        if (!user) {
+          this.storage.recordLoginAttempt(username);
+          return sendJson(401, { error: 'Credenciais inválidas.' });
+        }
 
         const isValid = CryptoEngine.verifyPassword(password, user.password_hash);
-        if (!isValid) return sendJson(401, { error: 'Senha incorreta' });
+        if (!isValid) {
+          const attempt = this.storage.recordLoginAttempt(username);
+          if (attempt.isLocked) {
+            return sendJson(429, { error: 'Muitas tentativas incorretas. Conta bloqueada por 15 minutos.' });
+          }
+          return sendJson(401, { error: 'Credenciais inválidas.' });
+        }
+
+        this.storage.resetLoginAttempts(username);
 
         try {
           const encObj = JSON.parse(user.encrypted_private_key);
@@ -339,12 +446,34 @@ class P2PNode {
         this.p2p.role = user.role;
         this.p2p.consensus.role = user.role;
 
+        // Gera token de sessão real
+        const token = crypto.randomBytes(32).toString('hex');
+        this.storage.createSession({
+          token,
+          userId: user.id,
+          username: user.username,
+          role: user.role,
+          expiresAt: Date.now() + (24 * 3600 * 1000)
+        });
+
         return sendJson(200, {
           success: true,
+          token,
           user: { id: user.id, username: user.username, role: user.role, publicKey: user.public_key }
         });
       }
 
+      if (pathname === '/api/auth/logout' && req.method === 'POST') {
+        const authHeader = req.headers['authorization'];
+        if (authHeader) {
+          const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+          this.storage.deleteSession(token);
+        }
+        this.activePrivateKeyPem = null;
+        return sendJson(200, { success: true, message: 'Sessão encerrada com segurança.' });
+      }
+
+      // 3. Gestão de Comunidades e Convites
       if (pathname === '/api/communities' && req.method === 'GET') {
         const communities = this.storage.getAllCommunities().map(c => {
           const messages = this.storage.getMessagesByCommunity(c.id, 100);
@@ -484,6 +613,7 @@ class P2PNode {
         });
       }
 
+      // 4. Mensagens
       if (pathname === '/api/messages' && req.method === 'GET') {
         const communityId = url.searchParams.get('communityId') || 'geral';
         const rawMessages = this.storage.getMessagesByCommunity(communityId, 100);
@@ -507,9 +637,10 @@ class P2PNode {
           return sendJson(404, { error: 'Comunidade não encontrada localmente.' });
         }
 
-        const isAdminRole = this.currentUser && this.currentUser.role === 'Administrador';
-        const isGenesisAdmin = this.currentUser && this.currentUser.public_key &&
-          (this.currentUser.public_key.replace(/-----[^\n]+-----|\s+/g, '') === (comm.genesis_admin_pubkey || '').replace(/-----[^\n]+-----|\s+/g, ''));
+        const user = getSessionUser();
+        const isAdminRole = user && user.role === 'Administrador';
+        const isGenesisAdmin = user && user.publicKey &&
+          (user.publicKey.replace(/-----[^\n]+-----|\s+/g, '') === (comm.genesis_admin_pubkey || '').replace(/-----[^\n]+-----|\s+/g, ''));
 
         if (!isAdminRole && !isGenesisAdmin) {
           return sendJson(403, { error: 'Apenas Administradores possuem permissão de publicação nesta comunidade.' });
@@ -520,7 +651,6 @@ class P2PNode {
         }
 
         const channelKey = this.storage.getKeyForEpoch(communityId, comm.current_epoch);
-
         if (!channelKey) {
           return sendJson(500, { error: 'Chave de criptografia da comunidade não encontrada localmente.' });
         }
@@ -549,14 +679,72 @@ class P2PNode {
         });
       }
 
-      if (pathname === '/api/users' && req.method === 'GET') {
-        const users = this.storage.getAllUsers();
-        return sendJson(200, { users });
+      // 5. ENDPOINTS DO PAINEL "VISÃO DA COMUNIDADE" (PROMPT 2 REQUISITO)
+      if (pathname === '/api/network/overview' && req.method === 'GET') {
+        const overview = this.p2p.getNetworkOverview();
+        return sendJson(200, overview);
       }
 
+      if (pathname === '/api/network/nodes' && req.method === 'GET') {
+        const nodes = this.p2p.getConnectedNodesList();
+        return sendJson(200, { nodes });
+      }
+
+      if (pathname === '/api/community/members' && req.method === 'GET') {
+        // Retorna apenas dados públicos e não sensíveis dos membros
+        const users = this.storage.getAllUsers().map(u => ({
+          id: u.id,
+          username: u.username,
+          role: u.role,
+          status: u.status,
+          deviceType: 'Desktop / Celular',
+          lastSeen: Date.now() - 30000
+        }));
+        return sendJson(200, { members: users });
+      }
+
+      if (pathname === '/api/community/devices' && req.method === 'GET') {
+        const activeSessions = this.storage.getActiveDeviceSessions();
+        const pushSubs = this.storage.getAllPushSubscriptions();
+        return sendJson(200, {
+          activeSessionsCount: activeSessions.length,
+          mobileCount: activeSessions.filter(s => s.device_type === 'mobile').length,
+          desktopCount: activeSessions.filter(s => s.device_type === 'desktop').length,
+          webCount: activeSessions.filter(s => s.device_type === 'web').length,
+          pushSubscribersCount: pushSubs.length
+        });
+      }
+
+      if (pathname === '/api/network/events' && req.method === 'GET') {
+        const events = this.storage.getRecentNetworkEvents(50);
+        return sendJson(200, { events });
+      }
+
+      // 6. Inscrição Web Push (VAPID)
+      if (pathname === '/api/notifications/subscribe' && req.method === 'POST') {
+        const body = await getBody();
+        this.notificationService.registerSubscription(body);
+        return sendJson(200, { success: true });
+      }
+
+      if (pathname === '/api/notifications/vapid-key' && req.method === 'GET') {
+        return sendJson(200, {
+          vapidPublicKey: this.notificationService.getVapidPublicKey()
+        });
+      }
+
+      // 7. Auditoria Criptográfica Imutável
+      if (pathname === '/api/audit' && req.method === 'GET') {
+        const logs = this.auditLogger.getRecentLogs(100);
+        const integrity = this.auditLogger.verifyChainIntegrity();
+        return sendJson(200, { integrity, logs });
+      }
+
+      // 8. Administração e Governança
       if (pathname === '/api/admin/role' && req.method === 'POST') {
-        if (!this.currentUser || (this.currentUser.role !== 'Administrador' && this.currentUser.role !== 'Moderador')) {
-          return sendJson(403, { error: 'Acesso negado. Requer privilégios administrativos.' });
+        const user = getSessionUser();
+        if (!user || user.role !== 'Administrador') {
+          return sendJson(403, { error: 'Acesso negado. Requer privilégios de Administrador.' });
         }
 
         const { userId, newRole } = await getBody();
@@ -567,8 +755,9 @@ class P2PNode {
       }
 
       if (pathname === '/api/admin/revoke' && req.method === 'POST') {
-        if (!this.currentUser || (this.currentUser.role !== 'Administrador' && this.currentUser.role !== 'Moderador')) {
-          return sendJson(403, { error: 'Acesso negado. Requer privilégios administrativos.' });
+        const user = getSessionUser();
+        if (!user || user.role !== 'Administrador') {
+          return sendJson(403, { error: 'Acesso negado. Requer privilégios de Administrador.' });
         }
 
         const { userId } = await getBody();
@@ -589,38 +778,14 @@ class P2PNode {
 
         return sendJson(200, {
           success: true,
-          message: `Membro revogado. Nova época criptográfica #${nextEpoch} ativada. Mensagens futuras serão inacessíveis ao membro revogado.`,
+          message: `Membro revogado. Nova época criptográfica #${nextEpoch} ativada.`,
           newEpoch
         });
       }
 
-      if (pathname === '/api/audit' && req.method === 'GET') {
-        const logs = this.auditLogger.getRecentLogs(100);
-        const integrity = this.auditLogger.verifyChainIntegrity();
-        return sendJson(200, { integrity, logs });
-      }
-
-      if (pathname === '/api/peers' && req.method === 'GET') {
-        const peers = this.storage.getAllPeers();
-        return sendJson(200, {
-          activeCount: this.p2p.peers.size,
-          peers
-        });
-      }
-
+      // 9. Exportação de Backup Criptografado
       if (pathname === '/api/export' && req.method === 'GET') {
-        const comm = this.storage.getCommunity('geral');
-        const messages = this.storage.getMessagesByCommunity('geral', 1000);
-        const audit = this.storage.getAuditLogs(1000);
-
-        const backup = {
-          exportTimestamp: Date.now(),
-          exportedBy: this.nodeId,
-          community: comm,
-          messages,
-          auditChain: audit
-        };
-
+        const backup = this.storage.createBackup();
         res.writeHead(200, {
           'Content-Type': 'application/json',
           'Content-Disposition': `attachment; filename="backup-comunidade-${Date.now()}.json"`
