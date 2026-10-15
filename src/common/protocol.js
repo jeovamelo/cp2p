@@ -33,7 +33,11 @@ const MessageType = {
 
   // Autenticação Mútua de Nós (Ed25519)
   NODE_AUTH_CHALLENGE: 'NODE_AUTH_CHALLENGE', // Desafio criptográfico com nonce para autenticação de nó
-  NODE_AUTH_RESPONSE: 'NODE_AUTH_RESPONSE'    // Resposta assinada com a chave privada do nó
+  NODE_AUTH_RESPONSE: 'NODE_AUTH_RESPONSE',   // Resposta assinada com a chave privada do nó
+
+  // Replicação de Arquivos e Chunks P2P
+  CHUNK_REQUEST: 'CHUNK_REQUEST',             // Solicitação de parte de arquivo por hash e índice
+  CHUNK_RESPONSE: 'CHUNK_RESPONSE'            // Envio dos dados da parte de arquivo
 };
 
 class ProtocolPacket {

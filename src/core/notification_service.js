@@ -85,16 +85,48 @@ class NotificationService extends EventEmitter {
    * Regra Zero-Knowledge: NUNCA inclui texto confidencial no corpo da notificação
    */
   dispatchForMessage(message, communityName = 'Comunidade Resiliente') {
-    const title = `Novo comunicado: ${communityName}`;
-    const body = `Publicação oficial #${message.sequence} recebida e verificada via rede P2P.`;
+    const channelId = message.channel_id || 'avisos';
+    let channelName = channelId;
+    if (this.storage.getChannel) {
+      const ch = this.storage.getChannel(message.community_id, channelId);
+      if (ch) channelName = ch.name;
+    }
+
+    let notifType = 'NEW_MESSAGE';
+    let title = `Novo comunicado: ${communityName}`;
+    let body = `Publicação oficial #${message.sequence} recebida e verificada via rede P2P.`;
+
+    if (message.reply_to_id) {
+      notifType = 'REPLY';
+      title = `Nova resposta em #${channelName}`;
+      body = `Nova resposta adicionada na comunidade ${communityName}.`;
+    } else if (message.file_hash) {
+      notifType = 'NEW_FILE';
+      title = `Novo arquivo em #${channelName}`;
+      body = `Anexo verificado (${message.file_name || 'arquivo'}) disponível para download.`;
+    } else if (message.link_preview) {
+      notifType = 'NEW_LINK';
+      title = `Novo link em #${channelName}`;
+      body = `Um link compartilhado foi adicionado ao canal.`;
+    } else if (message.is_pinned) {
+      notifType = 'MESSAGE_PINNED';
+      title = `Mensagem fixada em #${channelName}`;
+      body = `Um comunicado foi fixado no topo do canal.`;
+    } else if (channelId !== 'avisos') {
+      title = `Nova mensagem em #${channelName}`;
+      body = `Nova publicação recebida na comunidade ${communityName}.`;
+    }
 
     const notificationPayload = {
+      type: notifType,
       messageId: message.id,
       sequence: message.sequence,
       communityId: message.community_id,
+      channelId,
+      channelName,
       title,
       body,
-      timestamp: message.timestamp,
+      timestamp: message.timestamp || Date.now(),
       requiresDecryption: true
     };
 
@@ -104,15 +136,42 @@ class NotificationService extends EventEmitter {
     // 2. Emite evento local em tempo real (para Desktop App, PWA e Web local)
     this.emit('push', notificationPayload);
 
-    // 3. Envia para todos os dispositivos inscritos com retentativa
-    this.sendToSubscribers(notificationPayload);
+    // 3. Envia para todos os dispositivos inscritos com verificação de silenciamento de canal
+    this.sendToSubscribers(notificationPayload, channelId, message.community_id);
 
     return notificationPayload;
   }
 
-  async sendToSubscribers(payload) {
+  /**
+   * Despacha alerta genérico de sistema (ex: modo offline, retorno de conexão, convite aprovado)
+   */
+  dispatchGenericAlert({ type, communityId = 'geral', channelId = null, title, body, data = {} }) {
+    const notificationPayload = {
+      type,
+      communityId,
+      channelId,
+      title,
+      body,
+      data,
+      timestamp: Date.now(),
+      requiresDecryption: false
+    };
+
+    this.emit('push', notificationPayload);
+    this.sendToSubscribers(notificationPayload, channelId, communityId);
+    return notificationPayload;
+  }
+
+  async sendToSubscribers(payload, channelId = null, communityId = null) {
     const subscriptions = this.storage.getAllPushSubscriptions();
     for (const sub of subscriptions) {
+      // Verifica se o canal está silenciado para o usuário deste dispositivo
+      if (sub.user_id && channelId && communityId && this.storage.isChannelMuted) {
+        if (this.storage.isChannelMuted(sub.user_id, communityId, channelId)) {
+          continue; // Canal silenciado para este usuário
+        }
+      }
+
       try {
         await this._deliverToSubscription(sub, payload);
       } catch (err) {

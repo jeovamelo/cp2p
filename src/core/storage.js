@@ -223,6 +223,190 @@ class StorageManager {
       `);
       this.db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(2, Date.now());
     }
+
+    // Migração 3: Canais, Mensagens Enriquecidas, Reações, Convites, Outbox e Chunking de Arquivos
+    if (!applied.has(3)) {
+      this.db.exec(`
+        -- Canais da Comunidade (Avisos, Eventos, Documentos, Conversas, Suporte, etc.)
+        CREATE TABLE IF NOT EXISTS channels (
+          id TEXT NOT NULL,
+          community_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          icon TEXT DEFAULT '💬',
+          allow_member_posts INTEGER DEFAULT 0,
+          is_default INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (community_id, id)
+        );
+
+        -- Reações com Emojis nas mensagens
+        CREATE TABLE IF NOT EXISTS message_reactions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          message_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          emoji TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          UNIQUE(message_id, user_id, emoji)
+        );
+
+        -- Convites da Comunidade com códigos curtos amigáveis e QR Code
+        CREATE TABLE IF NOT EXISTS community_invites (
+          code TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          max_uses INTEGER DEFAULT 0,
+          uses_count INTEGER DEFAULT 0,
+          expires_at INTEGER DEFAULT 0,
+          requires_approval INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+
+        -- Solicitações de Entrada com Moderação de Administradores
+        CREATE TABLE IF NOT EXISTS join_requests (
+          id TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          public_key TEXT NOT NULL,
+          invite_code TEXT,
+          status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+          reviewed_by TEXT,
+          reviewed_at INTEGER,
+          created_at INTEGER NOT NULL
+        );
+
+        -- Fila Outbox para Mensagens e Anexos Offline com Sincronização Posterior
+        CREATE TABLE IF NOT EXISTS outbox_pending (
+          id TEXT PRIMARY KEY,
+          community_id TEXT NOT NULL,
+          channel_id TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          status TEXT DEFAULT 'pending', -- 'pending', 'syncing', 'synced', 'failed'
+          attempts INTEGER DEFAULT 0,
+          last_attempt INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+
+        -- Fragmentação de Arquivos Grandes (Chunking com Merkle Verificação)
+        CREATE TABLE IF NOT EXISTS file_chunks (
+          file_hash TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          total_chunks INTEGER NOT NULL,
+          chunk_hash TEXT NOT NULL,
+          chunk_size INTEGER NOT NULL,
+          chunk_data TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY(file_hash, chunk_index)
+        );
+
+        -- Políticas e Limites de Armazenamento por Nó
+        CREATE TABLE IF NOT EXISTS node_storage_settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+
+        -- Silenciamento e Preferências de Notificação por Canal
+        CREATE TABLE IF NOT EXISTS channel_notifications (
+          user_id TEXT NOT NULL,
+          community_id TEXT NOT NULL,
+          channel_id TEXT NOT NULL,
+          is_muted INTEGER DEFAULT 0,
+          muted_until INTEGER DEFAULT 0,
+          PRIMARY KEY(user_id, community_id, channel_id)
+        );
+      `);
+
+      // Atualização dinâmica de colunas na tabela messages (compatibilidade com SQLite)
+      const msgCols = new Set(
+        this.db.prepare('PRAGMA table_info(messages)').all().map(c => c.name)
+      );
+      const newCols = [
+        ['channel_id', "TEXT DEFAULT 'avisos'"],
+        ['reply_to_id', 'TEXT'],
+        ['forwarded_from_channel_id', 'TEXT'],
+        ['forwarded_from_community_id', 'TEXT'],
+        ['forwarded_origin_author', 'TEXT'],
+        ['is_pinned', 'INTEGER DEFAULT 0'],
+        ['pinned_at', 'INTEGER'],
+        ['pinned_by', 'TEXT'],
+        ['link_preview', 'TEXT'],
+        ['file_hash', 'TEXT'],
+        ['file_name', 'TEXT'],
+        ['file_size', 'INTEGER'],
+        ['file_mime', 'TEXT'],
+        ['file_chunks_total', 'INTEGER'],
+        ['is_edited', 'INTEGER DEFAULT 0'],
+        ['edited_at', 'INTEGER'],
+        ['deleted_at', 'INTEGER']
+      ];
+      for (const [col, colDef] of newCols) {
+        if (!msgCols.has(col)) {
+          this.db.exec(`ALTER TABLE messages ADD COLUMN ${col} ${colDef};`);
+        }
+      }
+
+      // Índices da Migração 3
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_messages_comm_chan ON messages(community_id, channel_id, sequence);
+        CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(community_id, channel_id, is_pinned);
+        CREATE INDEX IF NOT EXISTS idx_reactions_msg ON message_reactions(message_id);
+        CREATE INDEX IF NOT EXISTS idx_invites_comm ON community_invites(community_id);
+        CREATE INDEX IF NOT EXISTS idx_join_req_comm ON join_requests(community_id, status);
+        CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox_pending(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_file_chunks_hash ON file_chunks(file_hash);
+      `);
+
+      this.db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(3, Date.now());
+    }
+
+    // Migração 4: Cadastro Simples e Pseudônimo, Pareamento e Revogação de Dispositivos
+    if (!applied.has(4)) {
+      this.db.exec(`
+        -- Tabela de pareamento seguro de novos dispositivos (celular, tablet, desktop adicional)
+        CREATE TABLE IF NOT EXISTS device_pairings (
+          pairing_code TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          encrypted_vault_key TEXT NOT NULL,
+          public_key TEXT NOT NULL,
+          status TEXT DEFAULT 'pending', -- 'pending', 'paired', 'expired', 'revoked'
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+
+        -- Limitação de criação de contas e proteção anti-abuso por identificador/IP
+        CREATE TABLE IF NOT EXISTS registration_rate_limits (
+          client_identifier TEXT PRIMARY KEY,
+          registration_count INTEGER DEFAULT 1,
+          first_attempt INTEGER NOT NULL,
+          last_attempt INTEGER NOT NULL
+        );
+      `);
+
+      // Colunas opcionais na tabela users para cadastro pseudônimo
+      const userCols = new Set(
+        this.db.prepare('PRAGMA table_info(users)').all().map(c => c.name)
+      );
+      const userNewCols = [
+        ['recovery_code_hash', 'TEXT'],
+        ['is_pseudonym', 'INTEGER DEFAULT 1'],
+        ['device_id', 'TEXT']
+      ];
+      for (const [col, colDef] of userNewCols) {
+        if (!userCols.has(col)) {
+          this.db.exec(`ALTER TABLE users ADD COLUMN ${col} ${colDef};`);
+        }
+      }
+
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(username COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS idx_device_pairings_status ON device_pairings(status, expires_at);
+      `);
+
+      this.db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(4, Date.now());
+    }
   }
 
   // --- MÉTODOS DE COMUNIDADE ---
@@ -239,6 +423,7 @@ class StorageManager {
       community.current_epoch,
       community.created_at
     );
+    this.ensureDefaultChannels(community.id);
   }
 
   getCommunity(id) {
@@ -256,24 +441,139 @@ class StorageManager {
   // --- MÉTODOS DE USUÁRIOS ---
   createUser(user) {
     const stmt = this.db.prepare(`
-      INSERT INTO users (id, username, password_hash, public_key, encrypted_private_key, role, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, username, password_hash, public_key, encrypted_private_key, role, status, created_at, recovery_code_hash, is_pseudonym, device_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       user.id,
       user.username,
-      user.password_hash,
+      user.password_hash || 'PSEUDONYM_NO_PASSWORD',
       user.public_key,
       user.encrypted_private_key || null,
       user.role || 'Membro',
       user.status || 'active',
-      user.created_at || Date.now()
+      user.created_at || Date.now(),
+      user.recovery_code_hash || null,
+      user.is_pseudonym !== undefined ? (user.is_pseudonym ? 1 : 0) : 1,
+      user.device_id || null
     );
-    return user;
+    return this.getUserByUsername(user.username);
+  }
+
+  validateUsername(username) {
+    if (!username || typeof username !== 'string') {
+      return { valid: false, error: 'O nome de usuário não pode ser vazio.' };
+    }
+    const trimmed = username.trim();
+    if (trimmed.length < 3) {
+      return { valid: false, error: 'O nome de usuário deve ter no mínimo 3 caracteres.' };
+    }
+    if (trimmed.length > 25) {
+      return { valid: false, error: 'O nome de usuário deve ter no máximo 25 caracteres.' };
+    }
+    // Permitir letras (incluindo acentuação em português), números, sublinhado e hífen. Sem espaços.
+    const validPattern = /^[a-zA-Z0-9_\-\u00C0-\u00FF]+$/;
+    if (!validPattern.test(trimmed)) {
+      return { valid: false, error: 'O nome deve conter apenas letras, números, hífen (-) ou sublinhado (_), sem espaços ou caracteres especiais.' };
+    }
+
+    const lower = trimmed.toLowerCase();
+    const reserved = new Set([
+      'admin', 'administrador', 'moderador', 'mod', 'root', 'sistema',
+      'system', 'suporte', 'comunidade', 'cp2p', 'todos', 'all',
+      'broadcast', 'bot', 'vps', 'server', 'servidor', 'anon', 'anonymous', 'geral', 'rede'
+    ]);
+    if (reserved.has(lower)) {
+      return { valid: false, error: `O nome "${trimmed}" é reservado para o sistema.` };
+    }
+
+    const offensiveTerms = ['arrombado', 'fdp', 'nazista', 'racista', 'babaca', 'otario'];
+    if (offensiveTerms.some(term => lower.includes(term))) {
+      return { valid: false, error: 'O nome de usuário contém termos não permitidos.' };
+    }
+
+    return { valid: true, cleanUsername: trimmed };
   }
 
   getUserByUsername(username) {
-    return this.db.prepare(`SELECT * FROM users WHERE username = ?`).get(username);
+    if (!username || typeof username !== 'string') return null;
+    return this.db.prepare(`SELECT * FROM users WHERE LOWER(username) = LOWER(?)`).get(username.trim());
+  }
+
+  isUsernameAvailable(username) {
+    const user = this.getUserByUsername(username);
+    return !user;
+  }
+
+  generateUsernameSuggestions(baseUsername) {
+    const clean = (baseUsername || 'membro')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_\-\u00C0-\u00FF]/g, '')
+      .slice(0, 18);
+    const prefix = clean || 'membro';
+    const suggestions = [];
+
+    const candidates = [
+      `${prefix}_1`,
+      `${prefix}_2`,
+      `${prefix}_p2p`,
+      `${prefix}_br`,
+      `${prefix}_${Math.floor(100 + Math.random() * 900)}`,
+      `${prefix}_${Math.floor(1000 + Math.random() * 9000)}`
+    ];
+
+    for (const cand of candidates) {
+      if (this.isUsernameAvailable(cand) && !suggestions.includes(cand)) {
+        suggestions.push(cand);
+        if (suggestions.length >= 3) break;
+      }
+    }
+
+    let counter = 1;
+    while (suggestions.length < 3 && counter < 50) {
+      const fallback = `${prefix}_${counter}`;
+      if (this.isUsernameAvailable(fallback) && !suggestions.includes(fallback)) {
+        suggestions.push(fallback);
+      }
+      counter++;
+    }
+
+    return suggestions;
+  }
+
+  createPseudonymUser({ id, username, publicKey, encryptedPrivateKey, recoveryCodeHash, deviceId, role, status }) {
+    const stmt = this.db.prepare(`
+      INSERT INTO users (id, username, password_hash, public_key, encrypted_private_key, role, status, created_at, recovery_code_hash, is_pseudonym, device_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    `);
+    const now = Date.now();
+    stmt.run(
+      id,
+      username.trim(),
+      recoveryCodeHash || 'PSEUDONYM_PASSWORDLESS',
+      publicKey,
+      encryptedPrivateKey || null,
+      role || 'Membro',
+      status || 'active',
+      now,
+      recoveryCodeHash || null,
+      deviceId || null
+    );
+    return this.getUserByUsername(username);
+  }
+
+  updatePseudonymUsername(userId, newUsername) {
+    const val = this.validateUsername(newUsername);
+    if (!val.valid) return { success: false, error: val.error };
+    
+    const existing = this.getUserByUsername(val.cleanUsername);
+    if (existing && existing.id !== userId) {
+      return { success: false, error: 'Este nome de usuário já está em uso.' };
+    }
+
+    this.db.prepare(`UPDATE users SET username = ? WHERE id = ?`).run(val.cleanUsername, userId);
+    return { success: true, username: val.cleanUsername };
   }
 
   getUserByPublicKey(publicKey) {
@@ -289,7 +589,7 @@ class StorageManager {
   }
 
   getAllUsers() {
-    return this.db.prepare(`SELECT id, username, public_key, role, status, created_at FROM users ORDER BY created_at ASC`).all();
+    return this.db.prepare(`SELECT id, username, public_key, role, status, created_at, is_pseudonym, device_id FROM users ORDER BY created_at ASC`).all();
   }
 
   updateUserRole(userId, newRole) {
@@ -298,6 +598,92 @@ class StorageManager {
 
   setUserStatus(userId, status) {
     this.db.prepare(`UPDATE users SET status = ? WHERE id = ?`).run(status, userId);
+  }
+
+  // --- PAREAMENTO SEGURO DE DISPOSITIVOS ---
+  createDevicePairing({ pairingCode, userId, username, encryptedVaultKey, publicKey, expiresInMs = 10 * 60 * 1000 }) {
+    const expiresAt = Date.now() + expiresInMs;
+    this.db.prepare(`
+      INSERT OR REPLACE INTO device_pairings (pairing_code, user_id, username, encrypted_vault_key, public_key, status, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(pairingCode.toUpperCase(), userId, username, encryptedVaultKey, publicKey, Date.now(), expiresAt);
+
+    return { pairingCode: pairingCode.toUpperCase(), expiresAt };
+  }
+
+  getDevicePairing(pairingCode) {
+    if (!pairingCode) return null;
+    const pairing = this.db.prepare(`SELECT * FROM device_pairings WHERE pairing_code = ?`).get(pairingCode.trim().toUpperCase());
+    if (!pairing) return null;
+    if (pairing.expires_at < Date.now()) {
+      this.db.prepare(`UPDATE device_pairings SET status = 'expired' WHERE pairing_code = ?`).run(pairing.pairing_code);
+      return null;
+    }
+    return pairing;
+  }
+
+  completeDevicePairing(pairingCode) {
+    const pairing = this.getDevicePairing(pairingCode);
+    if (!pairing || pairing.status !== 'pending') return null;
+    this.db.prepare(`UPDATE device_pairings SET status = 'paired' WHERE pairing_code = ?`).run(pairing.pairing_code);
+    pairing.status = 'paired';
+    return pairing;
+  }
+
+  getUserDeviceSessions(userId) {
+    if (!userId) return [];
+    return this.db.prepare(`
+      SELECT session_id, user_id, device_type, client_type, status, last_seen, is_relay
+      FROM device_sessions
+      WHERE user_id = ?
+      ORDER BY last_seen DESC
+    `).all(userId);
+  }
+
+  revokeDeviceSession(userId, sessionId) {
+    this.db.prepare(`DELETE FROM sessions WHERE token = ? OR (user_id = ? AND token LIKE ?)`).run(sessionId, userId, `%${sessionId}%`);
+    const res = this.db.prepare(`DELETE FROM device_sessions WHERE session_id = ? AND user_id = ?`).run(sessionId, userId);
+    return res.changes > 0;
+  }
+
+  // --- CONTROLE DE CADASTROS ABUSIVOS (RATE LIMIT) ---
+  checkRegistrationRateLimit(clientIdentifier, maxRegistrations = 5, windowMs = 15 * 60 * 1000) {
+    if (!clientIdentifier) return { allowed: true };
+    const now = Date.now();
+    const row = this.db.prepare(`SELECT * FROM registration_rate_limits WHERE client_identifier = ?`).get(clientIdentifier);
+
+    if (!row) {
+      this.db.prepare(`
+        INSERT INTO registration_rate_limits (client_identifier, registration_count, first_attempt, last_attempt)
+        VALUES (?, 1, ?, ?)
+      `).run(clientIdentifier, now, now);
+      return { allowed: true, remaining: maxRegistrations - 1 };
+    }
+
+    if (now - row.first_attempt > windowMs) {
+      this.db.prepare(`
+        UPDATE registration_rate_limits
+        SET registration_count = 1, first_attempt = ?, last_attempt = ?
+        WHERE client_identifier = ?
+      `).run(now, now, clientIdentifier);
+      return { allowed: true, remaining: maxRegistrations - 1 };
+    }
+
+    if (row.registration_count >= maxRegistrations) {
+      const waitMinutes = Math.ceil((windowMs - (now - row.first_attempt)) / 60000);
+      return {
+        allowed: false,
+        error: `Limite de novos cadastros atingido para este dispositivo/rede. Aguarde ${waitMinutes} minutos antes de tentar novamente.`
+      };
+    }
+
+    this.db.prepare(`
+      UPDATE registration_rate_limits
+      SET registration_count = registration_count + 1, last_attempt = ?
+      WHERE client_identifier = ?
+    `).run(now, clientIdentifier);
+
+    return { allowed: true, remaining: maxRegistrations - (row.registration_count + 1) };
   }
 
   // --- SESSÕES SEGURAS & AUTENTICAÇÃO ---
@@ -412,6 +798,104 @@ class StorageManager {
     return row ? row.value : null;
   }
 
+  // --- MÉTODOS DE CANAIS ---
+  createChannel({ id, community_id, name, description, icon, allow_member_posts, is_default, created_at }) {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO channels (id, community_id, name, description, icon, allow_member_posts, is_default, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      id,
+      community_id,
+      name,
+      description || null,
+      icon || '💬',
+      allow_member_posts ? 1 : 0,
+      is_default ? 1 : 0,
+      created_at || Date.now()
+    );
+    return this.getChannel(community_id, id);
+  }
+
+  getChannel(communityId, channelId) {
+    return this.db.prepare(`SELECT * FROM channels WHERE community_id = ? AND id = ?`).get(communityId, channelId);
+  }
+
+  getChannelsByCommunity(communityId) {
+    this.ensureDefaultChannels(communityId);
+    return this.db.prepare(`SELECT * FROM channels WHERE community_id = ? ORDER BY is_default DESC, created_at ASC`).all(communityId);
+  }
+
+  ensureDefaultChannels(communityId) {
+    if (!communityId) return;
+    const defaults = [
+      {
+        id: 'avisos',
+        name: 'Avisos Oficiais',
+        description: 'Canal oficial de comunicados importantes da comunidade',
+        icon: '📢',
+        allow_member_posts: 0,
+        is_default: 1
+      },
+      {
+        id: 'eventos',
+        name: 'Eventos e Agendas',
+        description: 'Datas importantes, reuniões e mobilizações',
+        icon: '📅',
+        allow_member_posts: 0,
+        is_default: 0
+      },
+      {
+        id: 'documentos',
+        name: 'Documentos e Materiais',
+        description: 'Arquivos, cartilhas e documentos verificados',
+        icon: '📁',
+        allow_member_posts: 0,
+        is_default: 0
+      },
+      {
+        id: 'conversas',
+        name: 'Conversas e Debates',
+        description: 'Espaço aberto para conversas e debates entre membros',
+        icon: '💬',
+        allow_member_posts: 1,
+        is_default: 0
+      },
+      {
+        id: 'suporte',
+        name: 'Dúvidas e Suporte',
+        description: 'Canal de ajuda mútua e orientações',
+        icon: '🤝',
+        allow_member_posts: 1,
+        is_default: 0
+      }
+    ];
+
+    const existingStmt = this.db.prepare(`SELECT id FROM channels WHERE community_id = ? AND id = ?`);
+    const insertStmt = this.db.prepare(`
+      INSERT INTO channels (id, community_id, name, description, icon, allow_member_posts, is_default, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const d of defaults) {
+      const exists = existingStmt.get(communityId, d.id);
+      if (!exists) {
+        insertStmt.run(d.id, communityId, d.name, d.description, d.icon, d.allow_member_posts, d.is_default, Date.now());
+      }
+    }
+  }
+
+  updateChannelPermissions(communityId, channelId, allowMemberPosts) {
+    this.db.prepare(`UPDATE channels SET allow_member_posts = ? WHERE community_id = ? AND id = ?`)
+      .run(allowMemberPosts ? 1 : 0, communityId, channelId);
+  }
+
+  deleteChannel(communityId, channelId) {
+    if (channelId === 'avisos') return false; // Canal padrão de avisos é protegido
+    this.db.prepare(`DELETE FROM channels WHERE community_id = ? AND id = ?`).run(communityId, channelId);
+    return true;
+  }
+
   // --- MÉTODOS DE MENSAGENS (CRDT / HASH CHAIN) ---
   saveMessage(msg) {
     const existing = this.getMessageById(msg.id);
@@ -419,18 +903,27 @@ class StorageManager {
 
     const stmt = this.db.prepare(`
       INSERT INTO messages (
-        id, community_id, sequence, prev_hash, author_pubkey,
+        id, community_id, channel_id, sequence, prev_hash, author_pubkey,
         encrypted_content, iv, tag, attachment_type, attachment_data,
-        epoch, timestamp, signature, received_at
+        epoch, timestamp, signature, received_at,
+        reply_to_id, forwarded_from_channel_id, forwarded_from_community_id, forwarded_origin_author,
+        is_pinned, pinned_at, pinned_by, link_preview,
+        file_hash, file_name, file_size, file_mime, file_chunks_total,
+        is_edited, edited_at, deleted_at
       ) VALUES (
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?
       )
     `);
     stmt.run(
       msg.id,
       msg.community_id,
+      msg.channel_id || 'avisos',
       msg.sequence,
       msg.prev_hash,
       msg.author_pubkey,
@@ -442,7 +935,23 @@ class StorageManager {
       msg.epoch || 1,
       msg.timestamp,
       msg.signature,
-      msg.received_at || Date.now()
+      msg.received_at || Date.now(),
+      msg.reply_to_id || null,
+      msg.forwarded_from_channel_id || null,
+      msg.forwarded_from_community_id || null,
+      msg.forwarded_origin_author || null,
+      msg.is_pinned ? 1 : 0,
+      msg.pinned_at || null,
+      msg.pinned_by || null,
+      msg.link_preview ? (typeof msg.link_preview === 'string' ? msg.link_preview : JSON.stringify(msg.link_preview)) : null,
+      msg.file_hash || null,
+      msg.file_name || null,
+      msg.file_size || null,
+      msg.file_mime || null,
+      msg.file_chunks_total || null,
+      msg.is_edited ? 1 : 0,
+      msg.edited_at || null,
+      msg.deleted_at || null
     );
     return true;
   }
@@ -458,10 +967,70 @@ class StorageManager {
   getMessagesByCommunity(communityId, limit = 100) {
     return this.db.prepare(`
       SELECT * FROM messages 
-      WHERE community_id = ? 
+      WHERE community_id = ? AND deleted_at IS NULL
       ORDER BY sequence ASC 
       LIMIT ?
     `).all(communityId, limit);
+  }
+
+  getMessagesByChannel(communityId, channelId = 'avisos', limit = 100) {
+    return this.db.prepare(`
+      SELECT * FROM messages 
+      WHERE community_id = ? AND channel_id = ? AND deleted_at IS NULL
+      ORDER BY sequence ASC 
+      LIMIT ?
+    `).all(communityId, channelId, limit);
+  }
+
+  getPinnedMessages(communityId, channelId = null) {
+    if (channelId) {
+      return this.db.prepare(`
+        SELECT * FROM messages 
+        WHERE community_id = ? AND channel_id = ? AND is_pinned = 1 AND deleted_at IS NULL
+        ORDER BY pinned_at DESC
+      `).all(communityId, channelId);
+    }
+    return this.db.prepare(`
+      SELECT * FROM messages 
+      WHERE community_id = ? AND is_pinned = 1 AND deleted_at IS NULL
+      ORDER BY pinned_at DESC
+    `).all(communityId);
+  }
+
+  pinMessage(messageId, pinnedBy) {
+    this.db.prepare(`
+      UPDATE messages 
+      SET is_pinned = 1, pinned_at = ?, pinned_by = ? 
+      WHERE id = ?
+    `).run(Date.now(), pinnedBy, messageId);
+    return this.getMessageById(messageId);
+  }
+
+  unpinMessage(messageId) {
+    this.db.prepare(`
+      UPDATE messages 
+      SET is_pinned = 0, pinned_at = NULL, pinned_by = NULL 
+      WHERE id = ?
+    `).run(messageId);
+    return this.getMessageById(messageId);
+  }
+
+  editMessage(messageId, newEncryptedContent, iv, tag) {
+    this.db.prepare(`
+      UPDATE messages 
+      SET encrypted_content = ?, iv = ?, tag = ?, is_edited = 1, edited_at = ? 
+      WHERE id = ?
+    `).run(newEncryptedContent, iv, tag, Date.now(), messageId);
+    return this.getMessageById(messageId);
+  }
+
+  softDeleteMessage(messageId) {
+    this.db.prepare(`
+      UPDATE messages 
+      SET deleted_at = ? 
+      WHERE id = ?
+    `).run(Date.now(), messageId);
+    return true;
   }
 
   getLatestMessage(communityId) {
@@ -483,6 +1052,261 @@ class StorageManager {
   getMessageCount(communityId) {
     const row = this.db.prepare(`SELECT COUNT(*) as count FROM messages WHERE community_id = ?`).get(communityId);
     return row ? row.count : 0;
+  }
+
+  // --- REAÇÕES COM EMOJIS ---
+  addReaction(messageId, userId, username, emoji) {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO message_reactions (message_id, user_id, username, emoji, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(messageId, userId, username, emoji, Date.now());
+    return this.getReactionsForMessage(messageId);
+  }
+
+  removeReaction(messageId, userId, emoji) {
+    this.db.prepare(`
+      DELETE FROM message_reactions 
+      WHERE message_id = ? AND user_id = ? AND emoji = ?
+    `).run(messageId, userId, emoji);
+    return this.getReactionsForMessage(messageId);
+  }
+
+  getReactionsForMessage(messageId) {
+    const rows = this.db.prepare(`
+      SELECT emoji, user_id, username 
+      FROM message_reactions 
+      WHERE message_id = ? 
+      ORDER BY created_at ASC
+    `).all(messageId);
+
+    const map = {};
+    for (const r of rows) {
+      if (!map[r.emoji]) {
+        map[r.emoji] = { emoji: r.emoji, count: 0, users: [] };
+      }
+      map[r.emoji].count++;
+      map[r.emoji].users.push({ userId: r.user_id, username: r.username });
+    }
+    return Object.values(map);
+  }
+
+  getReactionsForMessages(messageIds) {
+    if (!messageIds || messageIds.length === 0) return {};
+    const placeholders = messageIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT message_id, emoji, user_id, username 
+      FROM message_reactions 
+      WHERE message_id IN (${placeholders})
+      ORDER BY created_at ASC
+    `).all(...messageIds);
+
+    const result = {};
+    for (const r of rows) {
+      if (!result[r.message_id]) result[r.message_id] = {};
+      if (!result[r.message_id][r.emoji]) {
+        result[r.message_id][r.emoji] = { emoji: r.emoji, count: 0, users: [] };
+      }
+      result[r.message_id][r.emoji].count++;
+      result[r.message_id][r.emoji].users.push({ userId: r.user_id, username: r.username });
+    }
+
+    const finalMap = {};
+    for (const mId of messageIds) {
+      finalMap[mId] = result[mId] ? Object.values(result[mId]) : [];
+    }
+    return finalMap;
+  }
+
+  // --- CONVITES DA COMUNIDADE E QR CODES ---
+  createInvite({ code, communityId, createdBy, maxUses = 0, expiresAt = 0, requiresApproval = 0 }) {
+    const inviteCode = code || `CR-${Math.floor(1000 + Math.random() * 9000)}`;
+    this.db.prepare(`
+      INSERT OR REPLACE INTO community_invites (code, community_id, created_by, max_uses, uses_count, expires_at, requires_approval, created_at)
+      VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+    `).run(inviteCode, communityId, createdBy, maxUses, expiresAt, requiresApproval ? 1 : 0, Date.now());
+    return this.getInvite(inviteCode);
+  }
+
+  getInvite(code) {
+    return this.db.prepare(`SELECT * FROM community_invites WHERE code = ?`).get(code);
+  }
+
+  useInvite(code) {
+    const invite = this.getInvite(code);
+    if (!invite) return { valid: false, reason: 'INVITE_NOT_FOUND' };
+    if (invite.expires_at > 0 && invite.expires_at < Date.now()) {
+      return { valid: false, reason: 'INVITE_EXPIRED' };
+    }
+    if (invite.max_uses > 0 && invite.uses_count >= invite.max_uses) {
+      return { valid: false, reason: 'INVITE_MAX_USES_REACHED' };
+    }
+    this.db.prepare(`UPDATE community_invites SET uses_count = uses_count + 1 WHERE code = ?`).run(code);
+    return { valid: true, invite };
+  }
+
+  revokeInvite(code) {
+    this.db.prepare(`DELETE FROM community_invites WHERE code = ?`).run(code);
+    return true;
+  }
+
+  getInvitesByCommunity(communityId) {
+    return this.db.prepare(`SELECT * FROM community_invites WHERE community_id = ? ORDER BY created_at DESC`).all(communityId);
+  }
+
+  // --- SOLICITAÇÕES DE ENTRADA (JOIN REQUESTS) ---
+  createJoinRequest({ id, communityId, userId, username, publicKey, inviteCode }) {
+    const reqId = id || `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    this.db.prepare(`
+      INSERT OR REPLACE INTO join_requests (id, community_id, user_id, username, public_key, invite_code, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+    `).run(reqId, communityId, userId, username, publicKey, inviteCode || null, Date.now());
+    return this.db.prepare(`SELECT * FROM join_requests WHERE id = ?`).get(reqId);
+  }
+
+  getJoinRequests(communityId, status = 'pending') {
+    return this.db.prepare(`
+      SELECT * FROM join_requests 
+      WHERE community_id = ? AND status = ?
+      ORDER BY created_at ASC
+    `).all(communityId, status);
+  }
+
+  getJoinRequestByUser(communityId, userId) {
+    return this.db.prepare(`
+      SELECT * FROM join_requests 
+      WHERE community_id = ? AND user_id = ?
+      ORDER BY created_at DESC LIMIT 1
+    `).get(communityId, userId);
+  }
+
+  reviewJoinRequest(requestId, status, reviewedBy) {
+    this.db.prepare(`
+      UPDATE join_requests 
+      SET status = ?, reviewed_by = ?, reviewed_at = ? 
+      WHERE id = ?
+    `).run(status, reviewedBy, Date.now(), requestId);
+    const req = this.db.prepare(`SELECT * FROM join_requests WHERE id = ?`).get(requestId);
+    if (req && status === 'approved') {
+      this.updateUserRole(req.user_id, 'Membro');
+    }
+    return req;
+  }
+
+  // --- FILA OUTBOX OFFLINE ---
+  queueOutbox({ id, communityId, channelId, payload }) {
+    const outboxId = id || `out_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    this.db.prepare(`
+      INSERT OR REPLACE INTO outbox_pending (id, community_id, channel_id, payload, status, attempts, last_attempt, created_at)
+      VALUES (?, ?, ?, ?, 'pending', 0, 0, ?)
+    `).run(outboxId, communityId, channelId || 'avisos', payloadStr, Date.now());
+    return outboxId;
+  }
+
+  getPendingOutbox(limit = 50) {
+    const rows = this.db.prepare(`
+      SELECT * FROM outbox_pending 
+      WHERE status IN ('pending', 'failed') AND attempts < 10
+      ORDER BY created_at ASC 
+      LIMIT ?
+    `).all(limit);
+    return rows.map(r => ({
+      ...r,
+      payload: JSON.parse(r.payload)
+    }));
+  }
+
+  updateOutboxStatus(id, status) {
+    this.db.prepare(`
+      UPDATE outbox_pending 
+      SET status = ?, attempts = attempts + 1, last_attempt = ? 
+      WHERE id = ?
+    `).run(status, Date.now(), id);
+  }
+
+  removeOutbox(id) {
+    this.db.prepare(`DELETE FROM outbox_pending WHERE id = ?`).run(id);
+  }
+
+  // --- FRAGMENTAÇÃO DE ARQUIVOS (CHUNKING MERKLE) ---
+  saveFileChunk({ fileHash, chunkIndex, totalChunks, chunkHash, chunkSize, chunkData }) {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO file_chunks (file_hash, chunk_index, total_chunks, chunk_hash, chunk_size, chunk_data, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(fileHash, chunkIndex, totalChunks, chunkHash, chunkSize, chunkData, Date.now());
+    return true;
+  }
+
+  getFileChunks(fileHash) {
+    return this.db.prepare(`
+      SELECT * FROM file_chunks 
+      WHERE file_hash = ? 
+      ORDER BY chunk_index ASC
+    `).all(fileHash);
+  }
+
+  getFileChunk(fileHash, chunkIndex) {
+    return this.db.prepare(`
+      SELECT * FROM file_chunks 
+      WHERE file_hash = ? AND chunk_index = ?
+    `).get(fileHash, chunkIndex);
+  }
+
+  getStoredChunksCount(fileHash) {
+    const row = this.db.prepare(`SELECT COUNT(*) as count FROM file_chunks WHERE file_hash = ?`).get(fileHash);
+    return row ? row.count : 0;
+  }
+
+  deleteFileChunks(fileHash) {
+    this.db.prepare(`DELETE FROM file_chunks WHERE file_hash = ?`).run(fileHash);
+  }
+
+  // --- POLÍTICAS E LIMITES DE ARMAZENAMENTO POR NÓ ---
+  setStorageSetting(key, value) {
+    this.db.prepare(`INSERT OR REPLACE INTO node_storage_settings (key, value) VALUES (?, ?)`).run(key, String(value));
+  }
+
+  getStorageSetting(key, defaultValue = null) {
+    const row = this.db.prepare(`SELECT value FROM node_storage_settings WHERE key = ?`).get(key);
+    return row ? row.value : defaultValue;
+  }
+
+  getStorageUsageSummary() {
+    const msgCount = this.db.prepare(`SELECT COUNT(*) as count FROM messages`).get().count;
+    const chunkRow = this.db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(chunk_size), 0) as total_bytes FROM file_chunks`).get();
+    const policy = this.getStorageSetting('storage_policy', 'all'); // 'all', 'messages_images', 'messages_only', 'no_persistence'
+    const maxStorageMB = parseInt(this.getStorageSetting('max_storage_mb', '500'), 10);
+
+    return {
+      policy,
+      maxStorageMB,
+      totalMessages: msgCount,
+      totalFileChunks: chunkRow.count,
+      totalChunkBytes: chunkRow.total_bytes,
+      totalChunkMB: (chunkRow.total_bytes / (1024 * 1024)).toFixed(2)
+    };
+  }
+
+  // --- SILENCIAMENTO E NOTIFICAÇÕES POR CANAL ---
+  setChannelMute(userId, communityId, channelId, isMuted, mutedUntil = 0) {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO channel_notifications (user_id, community_id, channel_id, is_muted, muted_until)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(userId, communityId, channelId, isMuted ? 1 : 0, mutedUntil);
+  }
+
+  isChannelMuted(userId, communityId, channelId) {
+    const row = this.db.prepare(`
+      SELECT is_muted, muted_until 
+      FROM channel_notifications 
+      WHERE user_id = ? AND community_id = ? AND channel_id = ?
+    `).get(userId, communityId, channelId);
+    if (!row) return false;
+    if (row.is_muted === 0) return false;
+    if (row.muted_until > 0 && row.muted_until < Date.now()) {
+      return false; // Mute expirou
+    }
+    return true;
   }
 
   // --- ÉPOCAS DE CHAVES SIMÉTRICAS ---
@@ -537,25 +1361,9 @@ class StorageManager {
     `).all();
   }
 
-  // --- DISPOSITIVOS E SESSÕES (PROMPT 2 REQUISITO) ---
-  registerDeviceSession({ sessionId, userId, deviceType, clientType, isRelay }) {
-    this.db.prepare(`
-      INSERT OR REPLACE INTO device_sessions (session_id, user_id, device_type, client_type, status, last_seen, is_relay)
-      VALUES (?, ?, ?, ?, 'online', ?, ?)
-    `).run(sessionId, userId || null, deviceType || 'desktop', clientType || 'app', Date.now(), isRelay ? 1 : 0);
-  }
-
+  // --- DISPOSITIVOS E SESSÕES ---
   heartbeatDeviceSession(sessionId) {
     this.db.prepare(`UPDATE device_sessions SET last_seen = ?, status = 'online' WHERE session_id = ?`).run(Date.now(), sessionId);
-  }
-
-  removeDeviceSession(sessionId) {
-    this.db.prepare(`DELETE FROM device_sessions WHERE session_id = ?`).run(sessionId);
-  }
-
-  getActiveDeviceSessions(maxAgeMs = 60000) {
-    const threshold = Date.now() - maxAgeMs;
-    return this.db.prepare(`SELECT * FROM device_sessions WHERE last_seen > ?`).all(threshold);
   }
 
   // --- LINHA DO TEMPO DE EVENTOS DA REDE (ZERO CONTEÚDO PRIVADO) ---
@@ -679,11 +1487,15 @@ class StorageManager {
   // --- BACKUP E RESTAURAÇÃO INTEGRAL ---
   createBackup() {
     return {
-      version: 2,
+      version: 3,
       exportedAt: Date.now(),
       communities: this.getAllCommunities(),
+      channels: this.db.prepare(`SELECT * FROM channels`).all(),
       users: this.getAllUsers(),
       messages: this.db.prepare(`SELECT * FROM messages ORDER BY sequence ASC`).all(),
+      reactions: this.db.prepare(`SELECT * FROM message_reactions`).all(),
+      invites: this.db.prepare(`SELECT * FROM community_invites`).all(),
+      storageSettings: this.db.prepare(`SELECT * FROM node_storage_settings`).all(),
       peers: this.getAllPeers(),
       keyEpochs: this.db.prepare(`SELECT * FROM key_epochs`).all(),
       auditLogs: this.db.prepare(`SELECT * FROM audit_logs`).all()
@@ -698,11 +1510,23 @@ class StorageManager {
     for (const comm of backup.communities) {
       this.saveCommunity(comm);
     }
+    for (const ch of (backup.channels || [])) {
+      this.createChannel(ch);
+    }
     for (const keyRow of (backup.keyEpochs || [])) {
       this.saveKeyEpoch(keyRow.community_id, keyRow.epoch, keyRow.channel_key, keyRow.created_by);
     }
     for (const msg of backup.messages) {
       this.saveMessage(msg);
+    }
+    for (const r of (backup.reactions || [])) {
+      this.addReaction(r.message_id, r.user_id, r.username, r.emoji);
+    }
+    for (const inv of (backup.invites || [])) {
+      this.createInvite(inv);
+    }
+    for (const st of (backup.storageSettings || [])) {
+      this.setStorageSetting(st.key, st.value);
     }
     return true;
   }

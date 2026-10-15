@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![P2P: Mesh & WebSockets](https://img.shields.io/badge/P2P-Mesh%20%26%20RFC%205389%20STUN-orange.svg)]()
 [![Security: Ed25519 + AES-256-GCM](https://img.shields.io/badge/Security-Ed25519%20%2B%20AES--256--GCM-red.svg)]()
-[![Tests: 36/36 Passing](https://img.shields.io/badge/Tests-36%2F36%20Passed-brightgreen.svg)]()
+[![Tests: 75/75 Passing](https://img.shields.io/badge/Tests-75%2F75%20Passed-brightgreen.svg)]()
 [![Domain: cp2p.democracias.org](https://img.shields.io/badge/Domain-cp2p.democracias.org-blue.svg)](https://cp2p.democracias.org)
 
 O **Comunidade Resiliente** é uma plataforma inovadora de comunicação comunitária onde **apenas administradores autorizados possuem a capacidade criptográfica de assinar e publicar comunicados oficiais**, e **todos os membros recebem as mensagens diretamente em seus computadores e celulares**.
@@ -187,27 +187,38 @@ Os nós continuarão trocando mensagens através da rede P2P sem qualquer interr
 
 ## 🧪 Suíte de Testes Automatizados
 
-A suíte cobre 10 módulos com 36 testes unitários e de integração:
+A suíte cobre 15 módulos com 75 testes unitários e de integração (100% aprovados):
 - **Módulo 1:** Primitivas criptográficas (Ed25519, AES-256-GCM, PBKDF2 e cofre local);
 - **Módulo 2:** Armazenamento SQLite com migrações versionadas, modo WAL e sessões;
 - **Módulo 3:** Cadeia causal de mensagens, rejeição de não-admins e reconciliação CRDT de split-brain;
 - **Módulo 4:** Consenso Raft-lite com termo persistente e quórum estrito de maioria;
-- **Módulo 5:** Notificações Web Push com garantia Zero-Knowledge e chaves VAPID;
+- **Módulo 5:** Notificações Web Push com garantia Zero-Knowledge, tipos de notificação e silenciamento de canais;
 - **Módulo 6:** Resolução de NAT e cliente STUN RFC 5389;
 - **Módulo 7:** Autenticação mútua challenge-response entre nós P2P;
 - **Módulo 8:** Proteção contra força bruta e bloqueio de conta (lockout);
 - **Módulo 9:** Painel "Visão da Comunidade", anonimização e eventos técnicos;
-- **Módulo 10:** Domínio oficial (`cp2p.democracias.org`), redirecionamento HTTPS, CORS restrito, cookies seguros e proxy reverso.
+- **Módulo 10:** Domínio oficial (`cp2p.democracias.org`), redirecionamento HTTPS, CORS restrito, cookies seguros e proxy reverso;
+- **Módulo 11:** Canais múltiplos (`#avisos`, `#eventos`, `#documentos`, `#conversas`, `#suporte`), mensagens enriquecidas, reações, fixação e soft delete;
+- **Módulo 12:** Pré-visualização segura de links (SSRF-Safe), fragmentação Merkle (512KB Chunks) e encaminhamento com proveniência;
+- **Módulo 13:** Convites amigáveis (`CR-XXXX`), geração autônoma de QR Codes vetoriais em SVG e solicitações de entrada (Join Requests);
+- **Módulo 14:** Resiliência offline, fila Outbox pendente com sincronização automática (`flushOutbox`) e protocolo P2P wire de chunks (`CHUNK_REQUEST`/`CHUNK_RESPONSE`);
+- **Módulo 15:** Cadastro simples e pseudônimo (sem dados pessoais, sem senha obrigatória), unicidade case-insensitive com sugestões inteligentes, chave privada protegida localmente, código de recuperação (`REC-XXXX`), pareamento seguro de novos dispositivos (`PAIR-XXXX` e QR Code) e rate limiting anti-abuso.
 
-Para rodar:
+Para rodar a suíte completa:
 ```bash
 npm test
+```
+
+Para rodar a simulação real de queda da VPS:
+```bash
+npm run simulate
 ```
 
 ---
 
 ## 📚 Documentação Detalhada
 
+- 📖 **[Manual Completo de Uso e Administração](docs/MANUAL_DO_USUARIO_E_ADMINISTRADOR.md)** *(Guia para usuários leigos, canais, anexos, offline, QR codes e administração)*
 - 📘 [Manual de Instalação e Operação](INSTALLATION.md)
 - 🚀 [Guia de Implantação em Produção (cp2p.democracias.org)](docs/production_deployment.md)
 - 📊 [Documentação do Painel "Visão da Comunidade"](docs/network_dashboard.md)

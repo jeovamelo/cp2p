@@ -19,24 +19,46 @@ class MessageChain {
    * Cria um novo bloco de mensagem assinado pelo Administrador
    * @param {object} params
    * @param {string} params.communityId
+   * @param {string} [params.channelId='avisos']
    * @param {string} params.plaintext - Conteúdo legível da mensagem
    * @param {string} params.channelKeyHex - Chave AES-256 do canal
    * @param {string} params.authorPublicKey - Chave pública Ed25519 do Admin
    * @param {string} params.authorPrivateKey - Chave privada Ed25519 do Admin
    * @param {number} [params.epoch=1] - Época da chave
-   * @param {string} [params.attachmentType=null] - 'image' ou 'file'
+   * @param {string} [params.attachmentType=null] - 'image', 'file', 'video', 'audio', 'doc'
    * @param {string} [params.attachmentData=null] - Base64 ou URL
+   * @param {string} [params.replyToId=null] - ID da mensagem respondida
+   * @param {string} [params.forwardedFromChannelId=null]
+   * @param {string} [params.forwardedFromCommunityId=null]
+   * @param {string} [params.forwardedOriginAuthor=null]
+   * @param {object|string} [params.linkPreview=null]
+   * @param {string} [params.fileHash=null]
+   * @param {string} [params.fileName=null]
+   * @param {number} [params.fileSize=null]
+   * @param {string} [params.fileMime=null]
+   * @param {number} [params.fileChunksTotal=null]
    * @returns {object} Mensagem formatada, criptografada, encadeada e assinada
    */
   createSignedMessage({
     communityId,
+    channelId = 'avisos',
     plaintext,
     channelKeyHex,
     authorPublicKey,
     authorPrivateKey,
     epoch = 1,
     attachmentType = null,
-    attachmentData = null
+    attachmentData = null,
+    replyToId = null,
+    forwardedFromChannelId = null,
+    forwardedFromCommunityId = null,
+    forwardedOriginAuthor = null,
+    linkPreview = null,
+    fileHash = null,
+    fileName = null,
+    fileSize = null,
+    fileMime = null,
+    fileChunksTotal = null
   }) {
     // 1. Obtém a última mensagem da comunidade para encadeamento
     const latest = this.storage.getLatestMessage(communityId);
@@ -62,6 +84,10 @@ class MessageChain {
       epoch,
       timestamp
     };
+    if (channelId && channelId !== 'avisos') blockData.channel_id = channelId;
+    if (replyToId) blockData.reply_to_id = replyToId;
+    if (forwardedFromChannelId) blockData.forwarded_from_channel_id = forwardedFromChannelId;
+    if (fileHash) blockData.file_hash = fileHash;
 
     const id = CryptoEngine.sha256(blockData);
 
@@ -70,6 +96,17 @@ class MessageChain {
 
     const message = {
       ...blockData,
+      channel_id: channelId || 'avisos',
+      reply_to_id: replyToId,
+      forwarded_from_channel_id: forwardedFromChannelId,
+      forwarded_from_community_id: forwardedFromCommunityId,
+      forwarded_origin_author: forwardedOriginAuthor,
+      link_preview: linkPreview,
+      file_hash: fileHash,
+      file_name: fileName,
+      file_size: fileSize,
+      file_mime: fileMime,
+      file_chunks_total: fileChunksTotal,
       id,
       signature,
       received_at: timestamp
@@ -124,6 +161,10 @@ class MessageChain {
       epoch: message.epoch,
       timestamp: message.timestamp
     };
+    if (message.channel_id && message.channel_id !== 'avisos') blockData.channel_id = message.channel_id;
+    if (message.reply_to_id) blockData.reply_to_id = message.reply_to_id;
+    if (message.forwarded_from_channel_id) blockData.forwarded_from_channel_id = message.forwarded_from_channel_id;
+    if (message.file_hash) blockData.file_hash = message.file_hash;
 
     const expectedId = CryptoEngine.sha256(blockData);
     if (expectedId !== message.id) {

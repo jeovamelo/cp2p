@@ -212,6 +212,10 @@ class P2PEngine extends EventEmitter {
       clearInterval(this.pexInterval);
       this.pexInterval = null;
     }
+    if (this.outboxInterval) {
+      clearInterval(this.outboxInterval);
+      this.outboxInterval = null;
+    }
     this.consensus.stop();
 
     for (const socket of this.peers.values()) {
@@ -386,6 +390,14 @@ class P2PEngine extends EventEmitter {
         this.handleSyncResponse(packet);
         break;
 
+      case MessageType.CHUNK_REQUEST:
+        this.handleChunkRequest(socket, packet);
+        break;
+
+      case MessageType.CHUNK_RESPONSE:
+        this.handleChunkResponse(socket, packet);
+        break;
+
       case MessageType.RELAY_FORWARD:
         this.handleRelayForward(socket, packet);
         break;
@@ -487,6 +499,7 @@ class P2PEngine extends EventEmitter {
     }
 
     this.emit('peer_connected', { nodeId: senderNodeId, host: payload.host, port: payload.port, isRelay: false });
+    this.flushOutbox();
   }
 
   handleHelloAck(socket, packet) {
@@ -519,6 +532,7 @@ class P2PEngine extends EventEmitter {
     }
 
     this.emit('peer_connected', { nodeId: senderNodeId, host: payload.host, port: payload.port, isRelay: false });
+    this.flushOutbox();
   }
 
   handlePeerExchange(remotePeers) {
@@ -557,9 +571,9 @@ class P2PEngine extends EventEmitter {
     return false;
   }
 
-  getAuthorizedAdminPubkeys(communityId) {
+  getAuthorizedAdminPubkeys(communityId, channelId = null) {
     const authorized = new Set();
-    const adminUsers = this.storage.getAllUsers().filter(u => u.role === 'Administrador' && u.status === 'active');
+    const adminUsers = this.storage.getAllUsers().filter(u => (u.role === 'Administrador' || u.role === 'Moderador') && u.status === 'active');
     for (const u of adminUsers) {
       if (u.public_key) authorized.add(u.public_key.trim());
     }
@@ -567,6 +581,17 @@ class P2PEngine extends EventEmitter {
     const community = this.storage.getCommunity(communityId);
     if (community && community.genesis_admin_pubkey && community.genesis_admin_pubkey !== 'GENESIS_ADMIN_PENDING') {
       authorized.add(community.genesis_admin_pubkey.trim());
+    }
+
+    // Se o canal permite post de membros, membros ativos também podem assinar mensagens nele
+    if (channelId) {
+      const channel = this.storage.getChannel(communityId, channelId);
+      if (channel && channel.allow_member_posts === 1) {
+        const members = this.storage.getAllUsers().filter(u => u.status === 'active');
+        for (const m of members) {
+          if (m.public_key) authorized.add(m.public_key.trim());
+        }
+      }
     }
 
     return Array.from(authorized);
@@ -580,7 +605,7 @@ class P2PEngine extends EventEmitter {
     this.stats.messagesGossiped++;
     this.stats.lastSyncTime = Date.now();
 
-    const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(message.community_id);
+    const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(message.community_id, message.channel_id);
     const result = this.chain.processIncomingMessage(message, authorizedAdminPubkeys);
 
     if (result.success) {
@@ -614,6 +639,55 @@ class P2PEngine extends EventEmitter {
 
     this.stats.messagesGossiped++;
     this.broadcast(packet);
+
+    // Se estiver sem nós peers conectados ou offline, salvar na fila Outbox do SQLite
+    const activePeers = Array.from(this.peers.values()).filter(s => s.readyState === WebSocket.OPEN);
+    if (activePeers.length === 0) {
+      this.storage.queueOutbox({
+        communityId: message.community_id,
+        channelId: message.channel_id || 'avisos',
+        payload: { type: 'GOSSIP_MESSAGE', message }
+      });
+      this.emit('message_queued_offline', message);
+    }
+  }
+
+  /**
+   * Esvazia e sincroniza mensagens pendentes da fila Outbox assim que a rede/peers retornam
+   */
+  flushOutbox() {
+    const activePeers = Array.from(this.peers.values()).filter(s => s.readyState === WebSocket.OPEN);
+    if (activePeers.length === 0) return 0;
+
+    const pending = this.storage.getPendingOutbox(50);
+    let flushedCount = 0;
+
+    for (const item of pending) {
+      try {
+        if (item.payload && item.payload.type === 'GOSSIP_MESSAGE' && item.payload.message) {
+          const packet = ProtocolPacket.create(MessageType.GOSSIP_MESSAGE, this.nodeId, {
+            message: item.payload.message
+          });
+          this.broadcast(packet);
+          this.storage.updateOutboxStatus(item.id, 'synced');
+          this.storage.removeOutbox(item.id);
+          flushedCount++;
+        }
+      } catch (e) {
+        this.storage.updateOutboxStatus(item.id, 'failed');
+      }
+    }
+
+    if (flushedCount > 0) {
+      this.storage.recordNetworkEvent(
+        'OUTBOX_FLUSHED',
+        `Fila offline: ${flushedCount} comunicados sincronizados automaticamente após restabelecimento de conexão P2P.`,
+        'info'
+      );
+      this.emit('outbox_flushed', { count: flushedCount });
+    }
+
+    return flushedCount;
   }
 
   sendSyncRequest(socket, communityId, fromSequence) {
@@ -647,10 +721,10 @@ class P2PEngine extends EventEmitter {
     const { communityId, messages } = packet.payload;
     if (!Array.isArray(messages)) return;
 
-    const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(communityId);
     let appliedCount = 0;
 
     for (const msg of messages) {
+      const authorizedAdminPubkeys = this.getAuthorizedAdminPubkeys(communityId, msg.channel_id);
       const res = this.chain.processIncomingMessage(msg, authorizedAdminPubkeys);
       if (res.success && (res.reason === 'APPLIED' || res.reason === 'PARTITION_RECONCILED')) {
         appliedCount++;
@@ -665,6 +739,94 @@ class P2PEngine extends EventEmitter {
         summary: `Sincronização P2P: ${appliedCount} comunicados recebidos e validados.`,
         severity: 'info'
       });
+    }
+  }
+
+  // --- REPLICAÇÃO P2P DE CHUNKS DE ARQUIVOS ---
+  handleChunkRequest(socket, packet) {
+    const { fileHash, chunkIndex } = packet.payload || {};
+    if (!fileHash || chunkIndex === undefined) return;
+
+    const chunk = this.storage.getFileChunk(fileHash, Number(chunkIndex));
+    if (chunk) {
+      const resp = ProtocolPacket.create(MessageType.CHUNK_RESPONSE, this.nodeId, {
+        fileHash: chunk.file_hash,
+        chunkIndex: chunk.chunk_index,
+        totalChunks: chunk.total_chunks,
+        chunkHash: chunk.chunk_hash,
+        chunkSize: chunk.chunk_size,
+        chunkData: chunk.chunk_data
+      });
+      try {
+        socket.send(JSON.stringify(resp));
+      } catch (e) {}
+    }
+  }
+
+  handleChunkResponse(socket, packet) {
+    const { fileHash, chunkIndex, totalChunks, chunkHash, chunkSize, chunkData } = packet.payload || {};
+    if (!fileHash || chunkIndex === undefined || !chunkData || !chunkHash) return;
+
+    // Verificar política local de armazenamento
+    const policy = this.storage.getStorageSetting('storage_policy') || 'all';
+    if (policy === 'messages_only') {
+      return;
+    }
+
+    // Validar integridade do fragmento através de SHA256 do payload binário
+    const chunkBuf = Buffer.from(chunkData, 'base64');
+    const computedHash = CryptoEngine.sha256(chunkBuf);
+    if (computedHash !== chunkHash) {
+      console.warn(`[P2P Chunk] Integridade corrompida no fragmento ${chunkIndex} do arquivo ${fileHash}`);
+      return;
+    }
+
+    // Persistir fragmento no armazenamento local SQLite
+    this.storage.saveFileChunk({
+      fileHash,
+      chunkIndex: Number(chunkIndex),
+      totalChunks: Number(totalChunks),
+      chunkHash,
+      chunkSize: chunkSize || chunkBuf.length,
+      chunkData
+    });
+
+    const storedCount = this.storage.getStoredChunksCount(fileHash);
+    this.emit('chunk_received', {
+      fileHash,
+      chunkIndex: Number(chunkIndex),
+      totalChunks: Number(totalChunks),
+      storedCount
+    });
+
+    if (storedCount >= totalChunks) {
+      this.emit('file_complete', {
+        fileHash,
+        totalChunks: Number(totalChunks)
+      });
+      this.storage.recordNetworkEvent(
+        'FILE_COMPLETED',
+        `Arquivo P2P recebido por completo (${totalChunks} partes): ${fileHash.substring(0, 16)}...`,
+        'info'
+      );
+    }
+  }
+
+  /**
+   * Solicita um chunk específico de arquivo para a malha P2P
+   * @param {string} fileHash 
+   * @param {number} chunkIndex 
+   */
+  requestFileChunk(fileHash, chunkIndex) {
+    const packet = ProtocolPacket.create(MessageType.CHUNK_REQUEST, this.nodeId, {
+      fileHash,
+      chunkIndex: Number(chunkIndex)
+    });
+    this.broadcast(packet);
+    if (this.bootstrapSocket && this.bootstrapSocket.readyState === WebSocket.OPEN) {
+      try {
+        this.bootstrapSocket.send(JSON.stringify(packet));
+      } catch (e) {}
     }
   }
 
@@ -745,6 +907,11 @@ class P2PEngine extends EventEmitter {
     // 2. Reconexão e Heartbeat da malha a cada 10 segundos
     this.reconnectInterval = setInterval(() => {
       this.reconnectToKnownPeers();
+    }, 10000);
+
+    // 3. Sincronização periódica da Fila Outbox Offline a cada 10 segundos
+    this.outboxInterval = setInterval(() => {
+      this.flushOutbox();
     }, 10000);
   }
 

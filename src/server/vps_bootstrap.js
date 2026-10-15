@@ -245,6 +245,8 @@ class VpsBootstrapServer {
           // 4. Difusão Epidêmica e Mensagens de Governança/Consenso
           if (
             type === MessageType.GOSSIP_MESSAGE ||
+            type === MessageType.CHUNK_REQUEST ||
+            type === MessageType.CHUNK_RESPONSE ||
             type === MessageType.ELECTION_CALL ||
             type === MessageType.ELECTION_VOTE ||
             type === MessageType.ELECTION_DECLARE ||

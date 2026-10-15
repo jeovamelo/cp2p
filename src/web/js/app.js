@@ -1,35 +1,36 @@
 /**
- * Comunidade Resiliente - Controlador Frontend da Interface WhatsApp Desktop P2P
- * Layout de 3 colunas aos moldes do WhatsApp Desktop / Comunidades:
- * - Coluna 1: Dock Lateral de Comunidades (Criar, Entrar via Convite, Alternar)
- * - Coluna 2: Canais & Chats da Comunidade (Avisos Oficiais, Discussão, Topologia)
- * - Coluna 3: Chat estilo WhatsApp (Bolhas verdes, Assinaturas Ed25519, Duplo Check ✓✓)
+ * Comunidade Resiliente - Controlador Principal Frontend (cp2p Modern UI)
+ * Experiência fluida, moderna e familiar sem marcas ou elementos proprietários.
+ * Suporta canais, mensagens ricas, anexos chunked, previews de links,
+ * encaminhamento, reações, convites com QR Code SVG, outbox e modo offline.
  */
 
 class AppController {
   constructor() {
     this.state = {
       user: null,
-      network: null,
+      token: localStorage.getItem('cp2p_token') || null,
       communities: [],
+      channels: [],
       activeCommunityId: 'geral',
-      activeChannel: 'announcements',
+      activeChannelId: 'avisos',
       messages: [],
-      attachmentBase64: null,
-      dashboard: {
-        overview: null,
-        nodes: [],
-        members: [],
-        devices: null,
-        events: []
-      },
-      memberFilter: 'all',
-      memberSearchQuery: ''
+      filteredMessages: [],
+      activeFilter: 'all',
+      searchQuery: '',
+      network: null,
+      pendingOutboxCount: 0,
+      replyingTo: null,
+      stagedAttachment: null, // { file, base64, name, size, type, isImage }
+      forwardingMsg: null,
+      currentTheme: localStorage.getItem('cp2p_theme') || 'dark'
     };
 
     this.liveSocket = null;
     this.reconnectTimer = null;
 
+    window.cp2pApp = this;
+    this.applyTheme(this.state.currentTheme);
     this.initElements();
     this.attachEventListeners();
     this.registerServiceWorker();
@@ -37,9 +38,33 @@ class AppController {
     this.loadInitialData();
   }
 
+  applyTheme(theme) {
+    document.body.classList.remove('theme-light', 'theme-contrast');
+    if (theme === 'light') {
+      document.body.classList.add('theme-light');
+    } else if (theme === 'contrast') {
+      document.body.classList.add('theme-contrast');
+    }
+    this.state.currentTheme = theme;
+    localStorage.setItem('cp2p_theme', theme);
+  }
+
+  cycleTheme() {
+    if (this.state.currentTheme === 'dark') {
+      this.applyTheme('light');
+      this.showToast('Tema Claro ativado');
+    } else if (this.state.currentTheme === 'light') {
+      this.applyTheme('contrast');
+      this.showToast('Tema Alto Contraste ativado');
+    } else {
+      this.applyTheme('dark');
+      this.showToast('Tema Escuro ativado');
+    }
+  }
+
   initElements() {
-    // Dock / Rail de Comunidades
-    this.communitiesContainer = document.getElementById('wa-communities-container');
+    // Dock Lateral de Comunidades
+    this.communitiesContainer = document.getElementById('cp2p-communities-container');
     this.btnOpenCreateComm = document.getElementById('btn-open-create-comm');
     this.btnOpenJoinComm = document.getElementById('btn-open-join-comm');
     this.railMeshDot = document.getElementById('rail-mesh-dot');
@@ -47,155 +72,279 @@ class AppController {
     this.btnQuickStatus = document.getElementById('btn-quick-status');
     this.btnUserProfileQuick = document.getElementById('btn-user-profile-quick');
 
-    // Sidebar de Canais & Chats
-    this.activeCommName = document.getElementById('wa-active-comm-name');
-    this.activeCommRole = document.getElementById('wa-active-comm-role');
+    // Sidebar de Canais & Navegação
+    this.activeCommName = document.getElementById('cp2p-active-comm-name');
+    this.activeCommRole = document.getElementById('cp2p-active-comm-role');
     this.btnInviteActiveComm = document.getElementById('btn-invite-active-comm');
+    this.btnOpenCreateChannel = document.getElementById('btn-open-create-channel');
     this.btnCommMenu = document.getElementById('btn-comm-menu');
-    this.searchInput = document.getElementById('wa-search-input');
-    this.channelsList = document.getElementById('wa-channels-list');
-    this.channelSnippet = document.getElementById('wa-snippet-text');
-    this.channelLastTime = document.getElementById('wa-channel-last-time');
-    this.msgCountBadge = document.getElementById('wa-msg-count-badge');
-    this.meshCountLabel = document.getElementById('wa-mesh-count-label');
-
-    // Sidebar Footer (Usuário Ativo)
-    this.sidebarAvatar = document.getElementById('sidebar-user-avatar');
-    this.sidebarName = document.getElementById('sidebar-user-name');
-    this.sidebarRole = document.getElementById('sidebar-user-role');
+    this.searchInput = document.getElementById('cp2p-search-input');
+    this.channelsList = document.getElementById('cp2p-channels-list');
+    this.sidebarUserAvatar = document.getElementById('sidebar-user-avatar');
+    this.sidebarUserName = document.getElementById('sidebar-user-name');
+    this.sidebarUserRole = document.getElementById('sidebar-user-role');
+    this.btnThemeToggle = document.getElementById('btn-theme-toggle');
     this.btnCopyPubkey = document.getElementById('btn-copy-pubkey');
 
-    // Chat Header & Pane
+    // Chat Header & Área Principal
+    this.chatHeaderIcon = document.getElementById('chat-header-icon');
     this.chatHeaderTitle = document.getElementById('chat-header-title');
     this.chatHeaderSubtitle = document.getElementById('chat-header-subtitle');
-    this.chatHeaderAvatar = document.getElementById('chat-header-avatar');
-    this.chatScroll = document.getElementById('wa-chat-scroll');
-    this.messagesStream = document.getElementById('messages-stream');
-    this.emptyState = document.getElementById('empty-state-view');
-    this.vpsOfflineBanner = document.getElementById('vps-offline-banner');
-
-    // Botões de Ação do Chat Header
+    this.chatStatusDot = document.getElementById('chat-status-dot');
+    this.cp2pNetworkBtnLabel = document.getElementById('cp2p-network-btn-label');
     this.btnOpenNetworkDashboard = document.getElementById('btn-open-network-dashboard');
-    this.waNetworkBtnLabel = document.getElementById('wa-network-btn-label');
-    this.btnOpenPeers = document.getElementById('btn-open-peers');
     this.btnOpenAudit = document.getElementById('btn-open-audit');
-    this.btnOpenBackup = document.getElementById('btn-open-backup');
+    this.btnOpenStorageSettings = document.getElementById('btn-open-storage-settings');
     this.btnOpenAdmin = document.getElementById('btn-open-admin');
     this.btnAuthAction = document.getElementById('btn-auth-action');
-    this.waPeersBtnLabel = document.getElementById('wa-peers-btn-label');
 
-    // Painel Visão da Comunidade / Status da Rede
-    this.dashLastUpdatedBadge = document.getElementById('dash-last-updated-badge');
-    this.dashUserRoleBadge = document.getElementById('dash-user-role-badge');
-    this.dashLiveDot = document.getElementById('dash-live-dot');
-    this.dashLiveLabel = document.getElementById('dash-live-label');
-    this.dashBtnRefresh = document.getElementById('dash-btn-refresh');
-    this.dashMembersSearch = document.getElementById('dash-members-search');
+    // Banners Informativos e Fixados
+    this.pinnedBar = document.getElementById('cp2p-pinned-bar');
+    this.pinnedSnippetText = document.getElementById('pinned-snippet-text');
+    this.btnJumpPinned = document.getElementById('btn-jump-pinned');
+    this.btnUnpinActive = document.getElementById('btn-unpin-active');
+    this.vpsOfflineBanner = document.getElementById('vps-offline-banner');
+    this.outboxPendingBanner = document.getElementById('outbox-pending-banner');
+    this.outboxCountLabel = document.getElementById('outbox-count-label');
+    this.btnFlushOutbox = document.getElementById('btn-flush-outbox');
+
+    // Feed de Mensagens
+    this.chatScroll = document.getElementById('cp2p-chat-scroll');
+    this.messagesStream = document.getElementById('messages-stream');
+    this.emptyStateView = document.getElementById('empty-state-view');
 
     // Composer
     this.adminComposer = document.getElementById('admin-composer');
     this.memberReadonlyBar = document.getElementById('member-readonly-bar');
     this.composerInput = document.getElementById('composer-input');
-    this.btnPublish = document.getElementById('btn-send-announcement');
-    this.btnAttachImage = document.getElementById('btn-attach-image');
+    this.btnAttachFile = document.getElementById('btn-attach-file');
     this.fileAttachmentInput = document.getElementById('file-attachment-input');
-    this.attachmentPreview = document.getElementById('composer-attachment-preview');
-    this.attachmentImg = document.getElementById('attachment-preview-img');
+    this.btnQuickEmoji = document.getElementById('btn-quick-emoji');
+    this.btnPublish = document.getElementById('btn-send-announcement');
+    
+    // Composer Previews (Reply & Attachment)
+    this.composerReplyPreview = document.getElementById('composer-reply-preview');
+    this.replyPreviewAuthor = document.getElementById('reply-preview-author');
+    this.replyPreviewText = document.getElementById('reply-preview-text');
+    this.btnCancelReply = document.getElementById('btn-cancel-reply');
+
+    this.composerAttachmentPreview = document.getElementById('composer-attachment-preview');
+    this.attachmentPreviewName = document.getElementById('attachment-preview-name');
+    this.attachmentPreviewSize = document.getElementById('attachment-preview-size');
     this.btnRemoveAttachment = document.getElementById('btn-remove-attachment');
-
-    // Modais & Ações
-    this.btnSubmitCreateComm = document.getElementById('btn-submit-create-comm');
-    this.newCommNameInput = document.getElementById('new-comm-name');
-    this.newCommDescInput = document.getElementById('new-comm-desc');
-
-    this.btnSubmitJoinComm = document.getElementById('btn-submit-join-comm');
-    this.joinCommCodeInput = document.getElementById('join-comm-code');
-
-    this.inviteCodeDisplay = document.getElementById('invite-code-display');
-    this.btnCopyInviteCode = document.getElementById('btn-copy-invite-code');
-
-    // Telemetria Modal Antiga / Compatibilidade
-    this.vpsPulse = document.getElementById('vps-pulse-dot');
-    this.vpsLabel = document.getElementById('vps-status-label');
-    this.meshPulse = document.getElementById('mesh-pulse-dot');
-    this.meshLabel = document.getElementById('mesh-status-label');
-    this.leaderLabel = document.getElementById('leader-status-label');
   }
 
   attachEventListeners() {
-    // Abrir Modais de Comunidade
-    this.btnOpenCreateComm.addEventListener('click', () => this.openModal('modal-create-comm'));
-    this.btnOpenJoinComm.addEventListener('click', () => this.openModal('modal-join-comm'));
-    this.btnInviteActiveComm.addEventListener('click', () => this.openInviteModalForActive());
+    // Alternância de Tema
+    if (this.btnThemeToggle) {
+      this.btnThemeToggle.addEventListener('click', () => this.cycleTheme());
+    }
 
-    // Botões de Criar e Entrar
-    this.btnSubmitCreateComm.addEventListener('click', () => this.handleCreateCommunity());
-    this.btnSubmitJoinComm.addEventListener('click', () => this.handleJoinCommunity());
-    this.btnCopyInviteCode.addEventListener('click', () => this.copyInviteCodeToClipboard());
+    // Abertura de Modais de Comunidade
+    if (this.btnOpenCreateComm) {
+      this.btnOpenCreateComm.addEventListener('click', () => this.openModal('modal-create-comm'));
+    }
+    if (this.btnOpenJoinComm) {
+      this.btnOpenJoinComm.addEventListener('click', () => this.openModal('modal-join-comm'));
+    }
+    if (this.btnInviteActiveComm) {
+      this.btnInviteActiveComm.addEventListener('click', () => this.openInviteModal());
+    }
+    if (this.btnOpenCreateChannel) {
+      this.btnOpenCreateChannel.addEventListener('click', () => this.openModal('modal-create-channel'));
+    }
 
-    // Painel Visão da Comunidade & Modais do Chat Header
+    // Abertura de Modais do Header
     if (this.btnOpenNetworkDashboard) {
       this.btnOpenNetworkDashboard.addEventListener('click', () => this.openNetworkDashboard());
     }
-    this.btnOpenPeers.addEventListener('click', () => this.openNetworkDashboard('nodes'));
-    this.btnOpenAudit.addEventListener('click', () => this.openAuditModal());
-    this.btnOpenBackup.addEventListener('click', () => this.openModal('modal-backup'));
-    this.btnOpenAdmin.addEventListener('click', () => this.openAdminModal());
-    this.btnAuthAction.addEventListener('click', () => this.openModal('modal-auth'));
-    this.btnQuickStatus.addEventListener('click', () => this.openNetworkDashboard());
-    this.btnUserProfileQuick.addEventListener('click', () => this.openModal('modal-auth'));
+    if (this.btnQuickStatus) {
+      this.btnQuickStatus.addEventListener('click', () => this.openNetworkDashboard());
+    }
+    if (this.btnOpenAudit) {
+      this.btnOpenAudit.addEventListener('click', () => this.openAuditModal());
+    }
+    if (this.btnOpenStorageSettings) {
+      this.btnOpenStorageSettings.addEventListener('click', () => this.openStorageModal());
+    }
+    if (this.btnOpenAdmin) {
+      this.btnOpenAdmin.addEventListener('click', () => this.openNetworkDashboard('tab-members'));
+    }
+    if (this.btnAuthAction) {
+      this.btnAuthAction.addEventListener('click', () => this.openModal('modal-auth-profile'));
+    }
+    if (this.btnUserProfileQuick) {
+      this.btnUserProfileQuick.addEventListener('click', () => this.openModal('modal-auth-profile'));
+    }
 
-    // Abas do Painel de Rede
-    document.querySelectorAll('.dash-tab-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        document.querySelectorAll('.dash-tab-btn').forEach(b => b.classList.remove('active'));
-        document.querySelectorAll('.dash-tab-pane').forEach(p => p.classList.remove('active'));
-        e.currentTarget.classList.add('active');
-        const tab = e.currentTarget.getAttribute('data-dash-tab');
-        const pane = document.getElementById(`pane-dash-${tab}`);
-        if (pane) pane.classList.add('active');
-        if (tab === 'topology') this.renderTopologyMap();
+    // Copiar Chave Pública
+    if (this.btnCopyPubkey) {
+      this.btnCopyPubkey.addEventListener('click', () => {
+        if (this.state.user && this.state.user.publicKey) {
+          navigator.clipboard.writeText(this.state.user.publicKey);
+          this.showToast('Chave pública Ed25519 copiada!');
+        } else {
+          this.showToast('Faça login para copiar sua chave.');
+        }
       });
-    });
+    }
 
-    // Filtros de Membros no Painel
-    document.querySelectorAll('[data-member-filter]').forEach(chip => {
+    // Busca e Filtros
+    if (this.searchInput) {
+      this.searchInput.addEventListener('input', (e) => {
+        this.state.searchQuery = e.target.value.toLowerCase().trim();
+        this.applyFilterAndSearch();
+      });
+    }
+
+    document.querySelectorAll('.cp2p-filter-chip').forEach(chip => {
       chip.addEventListener('click', (e) => {
-        document.querySelectorAll('[data-member-filter]').forEach(c => c.classList.remove('active'));
+        document.querySelectorAll('.cp2p-filter-chip').forEach(c => c.classList.remove('active'));
         e.currentTarget.classList.add('active');
-        this.state.memberFilter = e.currentTarget.getAttribute('data-member-filter');
-        this.renderMembersTable();
+        this.state.activeFilter = e.currentTarget.getAttribute('data-filter') || 'all';
+        this.applyFilterAndSearch();
       });
     });
 
-    if (this.dashMembersSearch) {
-      this.dashMembersSearch.addEventListener('input', (e) => {
-        this.state.memberSearchQuery = e.target.value.toLowerCase().trim();
-        this.renderMembersTable();
+    // Submissão de Formulários de Modais
+    const btnSubmitCreateComm = document.getElementById('btn-submit-create-comm');
+    if (btnSubmitCreateComm) btnSubmitCreateComm.addEventListener('click', () => this.handleCreateCommunity());
+
+    const btnSubmitJoinComm = document.getElementById('btn-submit-join-comm');
+    if (btnSubmitJoinComm) btnSubmitJoinComm.addEventListener('click', () => this.handleJoinCommunity());
+
+    const btnSubmitCreateChannel = document.getElementById('btn-submit-create-channel');
+    if (btnSubmitCreateChannel) btnSubmitCreateChannel.addEventListener('click', () => this.handleCreateChannel());
+
+    const btnSaveStorageSettings = document.getElementById('btn-save-storage-settings');
+    if (btnSaveStorageSettings) btnSaveStorageSettings.addEventListener('click', () => this.handleSaveStorageSettings());
+
+    const btnSubmitForward = document.getElementById('btn-submit-forward');
+    if (btnSubmitForward) btnSubmitForward.addEventListener('click', () => this.handleSubmitForward());
+
+    const btnCopyInviteLink = document.getElementById('btn-copy-invite-link');
+    if (btnCopyInviteLink) btnCopyInviteLink.addEventListener('click', () => this.copyInviteLink());
+
+    const btnShareNative = document.getElementById('btn-share-native');
+    if (btnShareNative) btnShareNative.addEventListener('click', () => this.shareNativeInvite());
+
+    const btnFlushOutbox = document.getElementById('btn-flush-outbox');
+    if (btnFlushOutbox) btnFlushOutbox.addEventListener('click', () => this.flushOutboxNow());
+
+    // Cadastro Simples & Pseudônimo
+    const btnEnterCommunity = document.getElementById('btn-enter-community');
+    if (btnEnterCommunity) btnEnterCommunity.addEventListener('click', () => this.handleSimplePseudonymRegister());
+
+    const pseudonymInput = document.getElementById('auth-pseudonym');
+    if (pseudonymInput) {
+      let debounceTimer = null;
+      pseudonymInput.addEventListener('input', (e) => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => this.checkPseudonymAvailability(e.target.value), 350);
+      });
+      pseudonymInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') this.handleSimplePseudonymRegister();
       });
     }
 
-    if (this.dashBtnRefresh) {
-      this.dashBtnRefresh.addEventListener('click', () => {
-        this.loadNetworkDashboardData();
-        this.showToast('Telemetria da comunidade atualizada!');
+    const btnToggleRecovery = document.getElementById('btn-toggle-recovery-view');
+    if (btnToggleRecovery) {
+      btnToggleRecovery.addEventListener('click', () => {
+        document.getElementById('auth-simple-form-view').style.display = 'none';
+        document.getElementById('auth-recovery-view').style.display = 'block';
       });
     }
 
-    const btnRecenter = document.getElementById('btn-recenter-topology');
-    if (btnRecenter) btnRecenter.addEventListener('click', () => this.renderTopologyMap());
+    const btnBackToSimple = document.getElementById('btn-back-to-simple-auth');
+    if (btnBackToSimple) {
+      btnBackToSimple.addEventListener('click', () => {
+        document.getElementById('auth-recovery-view').style.display = 'none';
+        document.getElementById('auth-simple-form-view').style.display = 'block';
+      });
+    }
 
-    const btnClosePopover = document.getElementById('btn-close-popover');
-    if (btnClosePopover) btnClosePopover.addEventListener('click', () => {
-      const popover = document.getElementById('dash-node-popover');
-      if (popover) popover.style.display = 'none';
-    });
+    const btnSubmitRecovery = document.getElementById('btn-submit-recovery');
+    if (btnSubmitRecovery) btnSubmitRecovery.addEventListener('click', () => this.handleRecoverAccount());
+
+    const btnCopyRecoveryCode = document.getElementById('btn-copy-recovery-code');
+    if (btnCopyRecoveryCode) {
+      btnCopyRecoveryCode.addEventListener('click', () => {
+        const code = document.getElementById('display-created-recovery-code').textContent.trim();
+        navigator.clipboard.writeText(code).then(() => this.showToast('Código de recuperação copiado!'));
+      });
+    }
+
+    const btnProceedAfterReg = document.getElementById('btn-proceed-after-register');
+    if (btnProceedAfterReg) {
+      btnProceedAfterReg.addEventListener('click', () => {
+        this.closeModal('modal-auth-profile');
+        this.loadInitialData();
+      });
+    }
+
+    // Modal de Pareamento de Dispositivos
+    const btnOpenPairing = document.getElementById('btn-open-pairing');
+    if (btnOpenPairing) {
+      btnOpenPairing.addEventListener('click', () => {
+        this.openModal('modal-device-pairing');
+        this.loadPairingCodeAndDevices();
+      });
+    }
+
+    // Anexo de Arquivos no Composer
+    if (this.btnAttachFile) {
+      this.btnAttachFile.addEventListener('click', () => this.fileAttachmentInput.click());
+    }
+    if (this.fileAttachmentInput) {
+      this.fileAttachmentInput.addEventListener('change', (e) => this.handleFileSelect(e));
+    }
+    if (this.btnRemoveAttachment) {
+      this.btnRemoveAttachment.addEventListener('click', () => this.clearAttachment());
+    }
+    if (this.btnCancelReply) {
+      this.btnCancelReply.addEventListener('click', () => this.clearReply());
+    }
+
+    // Envio de Mensagem
+    if (this.btnPublish) {
+      this.btnPublish.addEventListener('click', () => this.sendMessage());
+    }
+    if (this.composerInput) {
+      this.composerInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          this.sendMessage();
+        }
+      });
+    }
+
+    // Drag and Drop e Colar da Área de Transferência
+    window.addEventListener('paste', (e) => this.handleClipboardPaste(e));
+    
+    const dropTarget = document.getElementById('cp2p-chat-pane');
+    if (dropTarget) {
+      dropTarget.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropTarget.style.outline = '2px dashed var(--cp2p-primary)';
+      });
+      dropTarget.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropTarget.style.outline = 'none';
+      });
+      dropTarget.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropTarget.style.outline = 'none';
+        if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+          this.stageFile(e.dataTransfer.files[0]);
+        }
+      });
+    }
 
     // Fechar Modais
     document.querySelectorAll('[data-close]').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        const modalId = e.currentTarget.getAttribute('data-close');
-        this.closeModal(modalId);
+        const id = e.currentTarget.getAttribute('data-close');
+        this.closeModal(id);
       });
     });
 
@@ -205,522 +354,397 @@ class AppController {
       });
     });
 
-    // Copiar chave pública
-    this.btnCopyPubkey.addEventListener('click', () => {
-      if (this.state.user && this.state.user.publicKey) {
-        navigator.clipboard.writeText(this.state.user.publicKey);
-        this.showToast('Chave pública copiada com sucesso!');
-      }
-    });
-
-    // Anexo de Imagem
-    this.btnAttachImage.addEventListener('click', () => this.fileAttachmentInput.click());
-    this.fileAttachmentInput.addEventListener('change', (e) => this.handleFileSelect(e));
-    this.btnRemoveAttachment.addEventListener('click', () => this.removeAttachment());
-
-    // Publicação de Comunicado
-    this.btnPublish.addEventListener('click', () => this.publishAnnouncement());
-    this.composerInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        this.publishAnnouncement();
-      }
-    });
-
-    // Pesquisa em Tempo Real
-    this.searchInput.addEventListener('input', (e) => this.filterMessagesByQuery(e.target.value));
-
-    // Abas de Filtro
-    document.querySelectorAll('.wa-filter-chip').forEach(chip => {
-      chip.addEventListener('click', (e) => {
-        document.querySelectorAll('.wa-filter-chip').forEach(c => c.classList.remove('active'));
+    // Abas de Modais (ex: Dashboard de Rede)
+    document.querySelectorAll('.modal-tab-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const parent = e.currentTarget.closest('.modal-body');
+        if (!parent) return;
+        parent.querySelectorAll('.modal-tab-btn').forEach(b => b.classList.remove('active'));
+        parent.querySelectorAll('.tab-content').forEach(p => p.style.display = 'none');
         e.currentTarget.classList.add('active');
-        const filter = e.currentTarget.getAttribute('data-filter');
-        this.applyCategoryFilter(filter);
+        const tabId = e.currentTarget.getAttribute('data-tab');
+        const target = document.getElementById(tabId);
+        if (target) target.style.display = 'block';
       });
     });
-
-    // Canais da Sidebar
-    document.querySelectorAll('.wa-channel-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        document.querySelectorAll('.wa-channel-item').forEach(c => c.classList.remove('active'));
-        const el = e.currentTarget;
-        el.classList.add('active');
-        const channelType = el.getAttribute('data-channel');
-        this.switchChannel(channelType);
-      });
-    });
-
-    // Auth modal actions
-    document.getElementById('btn-submit-login').addEventListener('click', () => this.handleLogin());
-    document.getElementById('btn-submit-register').addEventListener('click', () => this.handleRegister());
   }
 
+  // --- CARREGAMENTO INICIAL DE DADOS ---
   async loadInitialData() {
-    try {
-      // 0. Configurações Centrais do Domínio e Ambiente
-      try {
-        const cfgRes = await fetch('/api/config');
-        if (cfgRes.ok) {
-          window.__APP_CONFIG__ = await cfgRes.json();
-        }
-      } catch (errCfg) {}
-
-      // 1. Status Geral e Usuário
-      const res = await fetch('/api/status');
-      const data = await res.json();
-      this.updateStatusUI(data);
-
-      // 2. Carrega Lista de Comunidades
-      await this.loadCommunities();
-
-      // 3. Carrega Mensagens da Comunidade Ativa
-      await this.loadMessages(this.state.activeCommunityId);
-    } catch (e) {
-      console.warn('Erro ao carregar dados iniciais:', e);
-    }
+    await this.fetchCurrentUser();
+    await this.loadCommunities();
+    await this.loadChannels();
+    await this.loadMessages();
+    await this.loadOutboxStatus();
+    await this.loadNetworkOverview();
   }
 
-  async loadCommunities() {
+  async fetchCurrentUser() {
     try {
-      const res = await fetch('/api/communities');
-      const data = await res.json();
-      this.state.communities = data.communities || [];
-
-      if (this.state.communities.length > 0) {
-        const found = this.state.communities.find(c => c.id === this.state.activeCommunityId);
-        if (!found) {
-          this.state.activeCommunityId = this.state.communities[0].id;
-        }
+      const res = await this.apiGet('/api/auth/me');
+      if (res && res.user) {
+        this.state.user = res.user;
+        this.updateUserUI(res.user);
+      } else {
+        this.openModal('modal-auth-profile');
       }
-
-      this.renderCommunitiesRail();
-      this.updateActiveCommunityHeader();
     } catch (e) {
-      console.error('Erro ao carregar comunidades:', e);
-    }
-  }
-
-  renderCommunitiesRail() {
-    this.communitiesContainer.innerHTML = '';
-
-    this.state.communities.forEach(comm => {
-      const circle = document.createElement('div');
-      circle.className = `wa-comm-circle ${comm.id === this.state.activeCommunityId ? 'active' : ''}`;
-      circle.setAttribute('title', comm.name);
-
-      // Iniciais da comunidade (máximo 2 letras)
-      const words = comm.name.trim().split(/\s+/);
-      const initials = words.length >= 2 
-        ? (words[0][0] + words[1][0]).toUpperCase()
-        : comm.name.slice(0, 2).toUpperCase();
-
-      circle.textContent = initials;
-
-      circle.addEventListener('click', () => {
-        if (this.state.activeCommunityId !== comm.id) {
-          this.switchCommunity(comm.id);
-        }
-      });
-
-      this.communitiesContainer.appendChild(circle);
-    });
-  }
-
-  switchCommunity(communityId) {
-    this.state.activeCommunityId = communityId;
-    this.renderCommunitiesRail();
-    this.updateActiveCommunityHeader();
-    this.loadMessages(communityId);
-  }
-
-  updateActiveCommunityHeader() {
-    const active = this.state.communities.find(c => c.id === this.state.activeCommunityId);
-    if (!active) return;
-
-    this.activeCommName.textContent = active.name;
-    this.activeCommRole.textContent = active.isAdmin ? 'Administrador' : 'Membro';
-
-    if (this.state.activeChannel === 'announcements') {
-      this.chatHeaderTitle.textContent = `Avisos Oficiais • ${active.name}`;
-      this.chatHeaderSubtitle.textContent = active.description || 'Canal oficial • Apenas administradores podem publicar • E2EE P2P';
-    }
-
-    this.updateComposerPermissions(active);
-  }
-
-  updateComposerPermissions(activeComm) {
-    const isAdmin = activeComm ? activeComm.isAdmin : (this.state.user && this.state.user.role === 'Administrador');
-
-    if (isAdmin) {
-      this.adminComposer.style.display = 'flex';
-      this.memberReadonlyBar.style.display = 'none';
-    } else {
-      this.adminComposer.style.display = 'none';
-      this.memberReadonlyBar.style.display = 'flex';
-    }
-  }
-
-  async loadMessages(communityId) {
-    try {
-      const res = await fetch(`/api/messages?communityId=${encodeURIComponent(communityId)}`);
-      const data = await res.json();
-      this.renderMessages(data.messages || []);
-    } catch (e) {
-      console.error('Erro ao carregar mensagens da comunidade:', e);
-    }
-  }
-
-  switchChannel(channelType) {
-    this.state.activeChannel = channelType;
-    const activeComm = this.state.communities.find(c => c.id === this.state.activeCommunityId);
-    const commName = activeComm ? activeComm.name : 'Comunidade';
-
-    if (channelType === 'announcements') {
-      this.chatHeaderAvatar.textContent = '📢';
-      this.chatHeaderTitle.textContent = `Avisos Oficiais • ${commName}`;
-      this.chatHeaderSubtitle.textContent = 'somente administradores podem publicar • E2EE P2P';
-      this.updateComposerPermissions(activeComm);
-      this.loadMessages(this.state.activeCommunityId);
-    } else if (channelType === 'discussion') {
-      this.chatHeaderAvatar.textContent = '💬';
-      this.chatHeaderTitle.textContent = `Discussão da Comunidade • ${commName}`;
-      this.chatHeaderSubtitle.textContent = 'Espaço aberto de troca e suporte mútuo entre membros';
-      this.adminComposer.style.display = 'none';
-      this.memberReadonlyBar.style.display = 'flex';
-      this.memberReadonlyBar.querySelector('span').textContent = 'Canal de Discussão aberto: use para interagir com a comunidade.';
-    } else if (channelType === 'network') {
-      this.openNetworkDashboard();
-    }
-  }
-
-  // --- CRIAÇÃO E CONVITES DE COMUNIDADE ---
-  async handleCreateCommunity() {
-    const name = this.newCommNameInput.value.trim();
-    const description = this.newCommDescInput.value.trim();
-
-    if (!name) {
-      alert('Digite o nome da comunidade.');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/communities', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description })
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || 'Erro ao criar comunidade.');
-        return;
+      if (!this.state.user) {
+        this.openModal('modal-auth-profile');
       }
-
-      this.closeModal('modal-create-comm');
-      this.newCommNameInput.value = '';
-      this.newCommDescInput.value = '';
-
-      this.showToast(`Comunidade "${name}" criada com sucesso!`);
-
-      await this.loadCommunities();
-      this.switchCommunity(data.community.id);
-
-      // Exibe imediatamente o código de convite para compartilhar
-      this.inviteCodeDisplay.value = data.inviteCode;
-      this.openModal('modal-invite-share');
-    } catch (e) {
-      alert('Erro de rede ao criar comunidade.');
     }
-  }
-
-  async handleJoinCommunity() {
-    const inviteCode = this.joinCommCodeInput.value.trim();
-    if (!inviteCode) {
-      alert('Cole o código de convite da comunidade.');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/communities/join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inviteCode })
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || 'Erro ao entrar na comunidade.');
-        return;
-      }
-
-      this.closeModal('modal-join-comm');
-      this.joinCommCodeInput.value = '';
-
-      this.showToast(data.message || 'Entrou na comunidade com sucesso!');
-
-      await this.loadCommunities();
-      this.switchCommunity(data.community.id);
-    } catch (e) {
-      alert('Erro de rede ao entrar na comunidade.');
-    }
-  }
-
-  async openInviteModalForActive() {
-    try {
-      const res = await fetch(`/api/communities/${encodeURIComponent(this.state.activeCommunityId)}/invite`);
-      const data = await res.json();
-
-      if (!res.ok) {
-        alert(data.error || 'Erro ao gerar convite.');
-        return;
-      }
-
-      this.inviteCodeDisplay.value = data.inviteCode;
-      this.openModal('modal-invite-share');
-    } catch (e) {
-      alert('Erro ao carregar código de convite.');
-    }
-  }
-
-  copyInviteCodeToClipboard() {
-    const code = this.inviteCodeDisplay.value;
-    if (code) {
-      navigator.clipboard.writeText(code);
-      this.showToast('Código de convite copiado para a área de transferência!');
-      this.btnCopyInviteCode.textContent = '✓ Copiado com Sucesso!';
-      setTimeout(() => {
-        this.btnCopyInviteCode.textContent = 'Copiar Código de Convite';
-      }, 2500);
-    }
-  }
-
-  // --- WEBSOCKET LIVE SEGURO (WSS) ---
-  connectLiveWebSocket() {
-    let wsUrl;
-    if (window.__APP_CONFIG__ && window.__APP_CONFIG__.wsUrl) {
-      wsUrl = `${window.__APP_CONFIG__.wsUrl}/live`;
-    } else {
-      const isHttps = window.location.protocol === 'https:';
-      const isOfficialDomain = window.location.hostname === 'cp2p.democracias.org';
-      const protocol = (isHttps || isOfficialDomain) ? 'wss:' : 'ws:';
-      wsUrl = `${protocol}//${window.location.host}/live`;
-    }
-
-    console.log('[Comunidade Resiliente] Conectando WebSocket Seguro em:', wsUrl);
-    try {
-      this.liveSocket = new WebSocket(wsUrl);
-    } catch (e) {
-      console.warn('[WebSocket] Falha ao instanciar socket:', e);
-      this.reconnectTimer = setTimeout(() => this.connectLiveWebSocket(), 3000);
-      return;
-    }
-
-    this.liveSocket.onopen = () => {
-      console.log('[Comunidade Resiliente] Conectado ao daemon via WebSocket seguro.');
-      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-      if (this.dashLiveDot) this.dashLiveDot.className = 'dash-live-dot green';
-      if (this.dashLiveLabel) this.dashLiveLabel.textContent = window.location.protocol === 'https:' ? 'Conexão WSS Segura' : 'Conectado';
-    };
-
-    this.liveSocket.onmessage = (event) => {
-      try {
-        const packet = JSON.parse(event.data);
-        this.handleLiveEvent(packet);
-      } catch (err) {
-        console.error('Erro ao processar mensagem live:', err);
-      }
-    };
-
-    this.liveSocket.onclose = () => {
-      if (this.dashLiveDot) this.dashLiveDot.className = 'dash-live-dot amber';
-      if (this.dashLiveLabel) this.dashLiveLabel.textContent = 'Reconectando...';
-      this.reconnectTimer = setTimeout(() => this.connectLiveWebSocket(), 3000);
-    };
-
-    this.liveSocket.onerror = (err) => {
-      console.warn('[WebSocket Live] Erro de transporte:', err);
-      if (this.dashLiveDot) this.dashLiveDot.className = 'dash-live-dot red';
-    };
-  }
-
-  handleLiveEvent(event) {
-    switch (event.type) {
-      case 'INIT_STATE':
-        if (event.networkStatus) this.updateNetworkUI(event.networkStatus);
-        if (event.user) this.updateUserUI(event.user);
-        if (event.networkOverview) {
-          this.state.dashboard.overview = event.networkOverview;
-          this.renderDashboardOverview();
-          this.renderTopologyMap();
-        }
-        break;
-
-      case 'NEW_MESSAGE':
-        if (event.message.communityId === this.state.activeCommunityId) {
-          this.appendMessage(event.message);
-        }
-        this.updateSidebarSnippet(event.message);
-        break;
-
-      case 'NETWORK_UPDATE':
-      case 'NETWORK_EVENT':
-      case 'PEER_CHANGE':
-      case 'LEADER_CHANGE':
-      case 'VPS_STATUS_CHANGE':
-        if (event.networkStatus) this.updateNetworkUI(event.networkStatus);
-        if (event.networkOverview) {
-          this.state.dashboard.overview = event.networkOverview;
-          this.renderDashboardOverview();
-          this.renderTopologyMap();
-        }
-        // Se o modal do painel estiver aberto, recarrega os dados em tempo real
-        const dashModal = document.getElementById('modal-network-dashboard');
-        if (dashModal && dashModal.classList.contains('active')) {
-          this.loadNetworkDashboardData();
-        }
-        break;
-
-      case 'PUSH_NOTIFICATION':
-        this.showBrowserNotification(event.notification);
-        break;
-
-      default:
-        break;
-    }
-  }
-
-  updateStatusUI(statusData) {
-    if (statusData.user) this.updateUserUI(statusData.user);
-    if (statusData.network) this.updateNetworkUI(statusData.network);
   }
 
   updateUserUI(user) {
-    this.state.user = user;
-    this.sidebarName.textContent = user.username;
-    this.sidebarAvatar.textContent = user.username.charAt(0).toUpperCase();
-    this.railUserAvatar.textContent = user.username.charAt(0).toUpperCase();
+    if (!user) return;
+    this.sidebarUserName.textContent = user.username;
+    this.sidebarUserRole.textContent = user.role;
+    const initial = user.username ? user.username.charAt(0).toUpperCase() : '?';
+    this.sidebarUserAvatar.textContent = initial;
+    this.railUserAvatar.textContent = initial;
+    this.btnAuthAction.textContent = user.username;
+    this.updateComposerPermissions();
+  }
 
-    this.sidebarRole.textContent = user.role;
-    this.sidebarRole.className = `wa-footer-role ${user.role === 'Administrador' ? 'admin' : (user.role === 'Moderador' ? 'mod' : 'member')}`;
+  // --- COMUNIDADES ---
+  async loadCommunities() {
+    try {
+      const res = await this.apiGet('/api/communities');
+      this.state.communities = (res && res.communities) ? res.communities : [];
+      this.renderCommunitiesList();
+    } catch (e) {
+      console.warn('Erro ao carregar comunidades:', e);
+    }
+  }
+
+  renderCommunitiesList() {
+    if (!this.communitiesContainer) return;
+    this.communitiesContainer.innerHTML = '';
+
+    this.state.communities.forEach(c => {
+      const item = document.createElement('div');
+      item.className = `cp2p-comm-item ${c.id === this.state.activeCommunityId ? 'active' : ''}`;
+      item.title = c.name;
+      item.textContent = c.name.charAt(0).toUpperCase();
+
+      if (c.messageCount > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = c.messageCount > 99 ? '99+' : c.messageCount;
+        item.appendChild(badge);
+      }
+
+      item.addEventListener('click', () => this.selectCommunity(c.id));
+      this.communitiesContainer.appendChild(item);
+    });
 
     const activeComm = this.state.communities.find(c => c.id === this.state.activeCommunityId);
-    this.updateComposerPermissions(activeComm);
+    if (activeComm) {
+      this.activeCommName.textContent = activeComm.name;
+      this.activeCommRole.textContent = activeComm.isAdmin ? 'Admin' : 'Membro';
+    }
   }
 
-  updateNetworkUI(net) {
-    this.state.network = net;
+  selectCommunity(communityId) {
+    this.state.activeCommunityId = communityId;
+    this.state.activeChannelId = 'avisos';
+    this.renderCommunitiesList();
+    this.loadChannels();
+    this.loadMessages();
+  }
 
-    // VPS Status
-    if (net.isVpsAlive) {
-      this.railMeshDot.className = 'pulse-dot online';
-      this.vpsOfflineBanner.style.display = 'none';
-      if (this.vpsPulse) this.vpsPulse.className = 'pulse-dot online';
-      if (this.vpsLabel) this.vpsLabel.textContent = 'VPS: Online';
+  // --- CANAIS ---
+  async loadChannels() {
+    try {
+      const res = await this.apiGet(`/api/channels?communityId=${encodeURIComponent(this.state.activeCommunityId)}`);
+      this.state.channels = (res && res.channels) ? res.channels : [];
+      this.renderChannelsList();
+    } catch (e) {
+      console.warn('Erro ao carregar canais:', e);
+    }
+  }
+
+  renderChannelsList() {
+    if (!this.channelsList) return;
+    this.channelsList.innerHTML = '';
+
+    this.state.channels.forEach(ch => {
+      const item = document.createElement('div');
+      item.className = `cp2p-channel-item ${ch.id === this.state.activeChannelId ? 'active' : ''}`;
+
+      const icon = ch.icon || (ch.id === 'avisos' ? '📢' : ch.id === 'documentos' ? '📁' : ch.id === 'conversas' ? '💬' : '📌');
+      const lockIcon = ch.allow_member_posts === 0 ? '🔒' : '';
+
+      item.innerHTML = `
+        <div class="cp2p-ch-left">
+          <span class="cp2p-ch-icon">${icon}</span>
+          <span class="cp2p-ch-name">${this.escapeHtml(ch.name)}</span>
+        </div>
+        <div class="cp2p-ch-meta">
+          ${lockIcon ? `<span class="cp2p-lock-icon" title="Apenas Administradores podem publicar">${lockIcon}</span>` : ''}
+        </div>
+      `;
+
+      item.addEventListener('click', () => this.selectChannel(ch.id));
+      this.channelsList.appendChild(item);
+    });
+
+    this.updateActiveChannelHeader();
+    this.updateComposerPermissions();
+  }
+
+  selectChannel(channelId) {
+    this.state.activeChannelId = channelId;
+    this.renderChannelsList();
+    this.loadMessages();
+  }
+
+  updateActiveChannelHeader() {
+    const ch = this.state.channels.find(c => c.id === this.state.activeChannelId);
+    if (!ch) return;
+
+    this.chatHeaderIcon.textContent = ch.icon || '💬';
+    this.chatHeaderTitle.textContent = ch.name;
+    const permissionsText = ch.allow_member_posts === 1 ? 'Aberto para mensagens de todos os membros' : 'Canal exclusivo para comunicados oficiais de Administradores';
+    this.chatHeaderSubtitle.textContent = `${ch.description || ''} • ${permissionsText}`;
+  }
+
+  updateComposerPermissions() {
+    const ch = this.state.channels.find(c => c.id === this.state.activeChannelId);
+    const allowMemberPosts = ch ? ch.allow_member_posts === 1 : false;
+    const isAdmin = this.state.user && (this.state.user.role === 'Administrador' || this.state.user.role === 'Moderador');
+
+    const canPost = isAdmin || allowMemberPosts;
+
+    if (canPost) {
+      this.adminComposer.style.display = 'block';
+      this.memberReadonlyBar.style.display = 'none';
+      if (this.composerInput) {
+        this.composerInput.placeholder = `Escreva uma mensagem assinada em #${ch ? ch.name : 'canal'}...`;
+      }
     } else {
-      this.railMeshDot.className = 'pulse-dot warning';
-      this.vpsOfflineBanner.style.display = 'flex';
-      if (this.vpsPulse) this.vpsPulse.className = 'pulse-dot warning';
-      if (this.vpsLabel) this.vpsLabel.textContent = 'VPS: Offline (Malha Ativa)';
-    }
-
-    // Peers Count
-    const peerCount = net.activePeersCount || 0;
-    this.waPeersBtnLabel.textContent = `Nós P2P (${peerCount})`;
-    this.meshCountLabel.textContent = `${peerCount} nós`;
-
-    if (this.meshPulse) this.meshPulse.className = peerCount > 0 ? 'pulse-dot online' : 'pulse-dot warning';
-    if (this.meshLabel) this.meshLabel.textContent = `Malha: ${peerCount} nó${peerCount === 1 ? '' : 's'}`;
-
-    // Líder
-    if (this.leaderLabel) {
-      const leaderName = net.isLeader ? `${net.currentLeader} (Este Nó)` : (net.currentLeader || '--');
-      this.leaderLabel.textContent = `Líder: ${leaderName}`;
+      this.adminComposer.style.display = 'none';
+      this.memberReadonlyBar.style.display = 'flex';
+      this.memberReadonlyBar.textContent = `🔒 Apenas administradores podem publicar no canal #${ch ? ch.name : 'avisos'}.`;
     }
   }
 
-  renderMessages(messages) {
-    this.state.messages = messages;
-    this.msgCountBadge.textContent = messages.length;
+  // --- MENSAGENS ---
+  async loadMessages() {
+    try {
+      const url = `/api/messages?communityId=${encodeURIComponent(this.state.activeCommunityId)}&channelId=${encodeURIComponent(this.state.activeChannelId)}`;
+      const res = await this.apiGet(url);
+      this.state.messages = (res && res.messages) ? res.messages : [];
+      this.applyFilterAndSearch();
+      this.updatePinnedBanner();
+    } catch (e) {
+      console.warn('Erro ao carregar mensagens:', e);
+    }
+  }
 
-    if (messages.length === 0) {
-      this.emptyState.style.display = 'block';
-      const bubbles = this.messagesStream.querySelectorAll('.wa-bubble-message');
-      bubbles.forEach(b => b.remove());
+  applyFilterAndSearch() {
+    let list = this.state.messages;
+
+    // Filtros rápidos
+    if (this.state.activeFilter === 'images') {
+      list = list.filter(m => m.attachmentType === 'image' || (m.file_mime && m.file_mime.startsWith('image/')));
+    } else if (this.state.activeFilter === 'files') {
+      list = list.filter(m => m.file_hash || m.attachmentType === 'file');
+    } else if (this.state.activeFilter === 'links') {
+      list = list.filter(m => m.link_preview || (m.text && m.text.includes('http')));
+    } else if (this.state.activeFilter === 'pinned') {
+      list = list.filter(m => m.is_pinned === 1);
+    }
+
+    // Busca textual
+    if (this.state.searchQuery) {
+      const q = this.state.searchQuery;
+      list = list.filter(m => 
+        (m.text && m.text.toLowerCase().includes(q)) ||
+        (m.authorName && m.authorName.toLowerCase().includes(q)) ||
+        (m.file_name && m.file_name.toLowerCase().includes(q))
+      );
+    }
+
+    this.state.filteredMessages = list;
+    this.renderMessagesStream();
+  }
+
+  renderMessagesStream() {
+    if (!this.messagesStream) return;
+    this.messagesStream.innerHTML = '';
+
+    if (this.state.filteredMessages.length === 0) {
+      this.emptyStateView.style.display = 'block';
+      this.emptyStateView.textContent = this.state.searchQuery ? 'Nenhum resultado encontrado para a busca.' : 'Nenhuma publicação neste canal ainda.';
+      this.messagesStream.appendChild(this.emptyStateView);
       return;
     }
 
-    this.emptyState.style.display = 'none';
-    const bubbles = this.messagesStream.querySelectorAll('.wa-bubble-message');
-    bubbles.forEach(b => b.remove());
+    this.emptyStateView.style.display = 'none';
 
-    messages.forEach(msg => {
-      const bubble = this.createMessageBubble(msg);
-      this.messagesStream.appendChild(bubble);
+    this.state.filteredMessages.forEach(msg => {
+      const card = this.createMessageCard(msg);
+      this.messagesStream.appendChild(card);
     });
 
-    const last = messages[messages.length - 1];
-    if (last) this.updateSidebarSnippet(last);
-
     this.scrollToBottom();
   }
 
-  appendMessage(msg) {
-    if (this.state.messages.some(m => m.id === msg.id)) return;
+  createMessageCard(msg) {
+    const card = document.createElement('div');
+    const isOutgoing = this.state.user && msg.author_pubkey && this.state.user.publicKey && 
+      (msg.author_pubkey.replace(/-----[^\n]+-----|\s+/g, '') === this.state.user.publicKey.replace(/-----[^\n]+-----|\s+/g, ''));
 
-    this.state.messages.push(msg);
-    this.emptyState.style.display = 'none';
-    this.msgCountBadge.textContent = this.state.messages.length;
-
-    const bubble = this.createMessageBubble(msg);
-    this.messagesStream.appendChild(bubble);
-    this.updateSidebarSnippet(msg);
-    this.scrollToBottom();
-  }
-
-  createMessageBubble(msg) {
-    const bubble = document.createElement('div');
-    bubble.className = 'wa-bubble-message admin-announcement';
-    bubble.id = `msg-${msg.id}`;
+    card.className = `cp2p-message-card ${isOutgoing ? 'outgoing' : ''} ${msg.is_pinned === 1 ? 'pinned' : ''}`;
+    card.id = `msg-${msg.id}`;
 
     const dateStr = new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-    let attachmentHtml = '';
+    // Header da Mensagem
+    let headerHtml = `
+      <div class="cp2p-msg-header">
+        <div class="cp2p-msg-author-row">
+          <span class="cp2p-msg-author">${this.escapeHtml(msg.authorName || 'Membro')}</span>
+          <span class="cp2p-role-tag ${msg.authorRole === 'Administrador' ? 'admin' : ''}">${msg.authorRole || 'Membro'}</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          ${msg.is_pinned === 1 ? '<span title="Mensagem Fixada">📌</span>' : ''}
+          <span class="cp2p-msg-time">#${msg.sequence} • ${dateStr}</span>
+        </div>
+      </div>
+    `;
+
+    // Proveniência se encaminhado
+    let forwardedHtml = '';
+    if (msg.forwarded_from_channel_id) {
+      forwardedHtml = `
+        <div class="cp2p-forwarded-tag">
+          ↪️ Encaminhado de #${this.escapeHtml(msg.forwarded_from_channel_id)} ${msg.forwarded_origin_author ? `(por ${this.escapeHtml(msg.forwarded_origin_author)})` : ''}
+        </div>
+      `;
+    }
+
+    // Citação se for resposta
+    let quoteHtml = '';
+    if (msg.reply_to_id) {
+      const parent = this.state.messages.find(m => m.id === msg.reply_to_id);
+      quoteHtml = `
+        <div class="cp2p-quote-box">
+          <div class="cp2p-quote-author">↩️ Em resposta a ${parent ? this.escapeHtml(parent.authorName) : 'mensagem anterior'}</div>
+          <div class="cp2p-quote-snippet">${parent ? this.escapeHtml(parent.text.slice(0, 80)) : 'Mensagem original'}</div>
+        </div>
+      `;
+    }
+
+    // Corpo de Texto Sanitizado com URLs Clicáveis
+    const formattedText = this.formatMessageText(msg.text);
+    let textHtml = `<div class="cp2p-msg-text">${formattedText}</div>`;
+
+    // Preview de Link OpenGraph
+    let linkPreviewHtml = '';
+    if (msg.link_preview) {
+      try {
+        const preview = typeof msg.link_preview === 'string' ? JSON.parse(msg.link_preview) : msg.link_preview;
+        if (preview && preview.title) {
+          linkPreviewHtml = `
+            <a href="${this.escapeHtml(preview.url)}" target="_blank" rel="noopener noreferrer" class="cp2p-link-card">
+              ${preview.image ? `<img src="${this.escapeHtml(preview.image)}" class="cp2p-link-thumb" alt="Preview" loading="lazy">` : ''}
+              <div class="cp2p-link-info">
+                <div class="cp2p-link-title">${this.escapeHtml(preview.title)}</div>
+                ${preview.description ? `<div class="cp2p-link-desc">${this.escapeHtml(preview.description)}</div>` : ''}
+                <div class="cp2p-link-host">🌐 ${this.escapeHtml(new URL(preview.url).hostname)}</div>
+              </div>
+            </a>
+          `;
+        }
+      } catch (e) {}
+    }
+
+    // Anexo de Imagem
+    let imageAttachmentHtml = '';
     if (msg.attachmentType === 'image' && msg.attachmentData) {
-      attachmentHtml = `
-        <div class="wa-bubble-attachment">
+      imageAttachmentHtml = `
+        <div class="cp2p-image-attachment" onclick="app.openLightbox('${this.escapeHtml(msg.attachmentData)}')">
           <img src="${msg.attachmentData}" alt="Imagem do comunicado" loading="lazy">
         </div>
       `;
     }
 
-    bubble.innerHTML = `
-      <div class="wa-bubble-header">
-        <span class="wa-bubble-author">
-          ${this.escapeHtml(msg.authorName)}
-          <span class="wa-badge-admin">ADMINISTRADOR</span>
-          <span class="wa-badge-verified">✓ Ed25519</span>
-        </span>
-        <span class="wa-bubble-seq">#${msg.sequence}</span>
-      </div>
+    // Anexo de Arquivo com Download Chunked
+    let fileAttachmentHtml = '';
+    if (msg.file_hash) {
+      const sizeStr = this.formatBytes(msg.file_size || 0);
+      fileAttachmentHtml = `
+        <div class="cp2p-file-card">
+          <div class="cp2p-file-left">
+            <span class="cp2p-file-icon">📁</span>
+            <div>
+              <div class="cp2p-file-name" title="${this.escapeHtml(msg.file_name || 'arquivo')}">${this.escapeHtml(msg.file_name || 'arquivo')}</div>
+              <div class="cp2p-file-meta">${sizeStr} • Verificação SHA-256 Íntegra</div>
+            </div>
+          </div>
+          <button class="cp2p-btn-download" onclick="app.downloadFile('${msg.file_hash}', '${this.escapeHtml(msg.file_name || 'anexo')}')">
+            Baixar Arquivo
+          </button>
+        </div>
+      `;
+    }
 
-      <div class="wa-bubble-text">${this.escapeHtml(msg.text)}</div>
+    // Reações de Emojis
+    const reactions = msg.reactions || [];
+    let reactionsHtml = '<div class="cp2p-reactions-row">';
+    reactions.forEach(r => {
+      reactionsHtml += `
+        <div class="cp2p-reaction-chip" onclick="app.toggleReaction('${msg.id}', '${r.emoji}')">
+          <span>${r.emoji}</span>
+          <span>${r.count}</span>
+        </div>
+      `;
+    });
+    reactionsHtml += '</div>';
 
-      ${attachmentHtml}
-
-      <div class="wa-bubble-footer">
-        <span class="wa-bubble-time">${dateStr}</span>
-        <span class="wa-bubble-checks" title="Verificado na rede P2P">✓✓</span>
+    // Ações de Mensagem (Hover/Contextual)
+    const isAdmin = this.state.user && (this.state.user.role === 'Administrador' || this.state.user.role === 'Moderador');
+    const actionsHtml = `
+      <div class="cp2p-msg-actions">
+        <button class="cp2p-msg-action-btn" title="Responder" onclick="app.startReply('${msg.id}')">↩️</button>
+        <button class="cp2p-msg-action-btn" title="Reagir com emoji" onclick="app.openReactionPalette('${msg.id}')">😊</button>
+        <button class="cp2p-msg-action-btn" title="Encaminhar" onclick="app.startForward('${msg.id}')">↪️</button>
+        ${isAdmin ? `<button class="cp2p-msg-action-btn" title="${msg.is_pinned ? 'Desafixar' : 'Fixar'}" onclick="app.togglePin('${msg.id}', ${msg.is_pinned ? 'false' : 'true'})">📌</button>` : ''}
+        ${(isAdmin || isOutgoing) ? `<button class="cp2p-msg-action-btn" title="Excluir" onclick="app.deleteMessage('${msg.id}')">🗑️</button>` : ''}
       </div>
     `;
 
-    return bubble;
+    // Footer da Mensagem
+    let footerHtml = `
+      <div class="cp2p-msg-footer">
+        ${reactionsHtml}
+        <div style="display: flex; align-items: center; gap: 8px;">
+          ${actionsHtml}
+          <span class="cp2p-msg-status" title="Assinado com Ed25519 e verificado na rede">✓✓</span>
+        </div>
+      </div>
+    `;
+
+    card.innerHTML = headerHtml + forwardedHtml + quoteHtml + textHtml + linkPreviewHtml + imageAttachmentHtml + fileAttachmentHtml + footerHtml;
+    return card;
   }
 
-  updateSidebarSnippet(msg) {
-    this.channelSnippet.textContent = msg.text.length > 40 ? msg.text.slice(0, 40) + '...' : msg.text;
-    const timeStr = new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    this.channelLastTime.textContent = timeStr;
+  formatMessageText(text) {
+    if (!text) return '';
+    const escaped = this.escapeHtml(text);
+    // Transforma links em âncoras clicáveis seguras
+    const urlPattern = /(https?:\/\/[^\s<]+)/g;
+    return escaped.replace(urlPattern, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+
+  formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
   scrollToBottom() {
@@ -729,831 +753,975 @@ class AppController {
     }
   }
 
-  // --- COMPOSER ANEXO & PUBLICAÇÃO ---
+  // --- COMPOSER: ANEXOS, DRAG & DROP E PASTE ---
   handleFileSelect(event) {
     const file = event.target.files[0];
-    if (!file) return;
+    if (file) this.stageFile(file);
+  }
 
-    if (!file.type.startsWith('image/')) {
-      alert('Selecione apenas arquivos de imagem.');
-      return;
+  handleClipboardPaste(event) {
+    const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) {
+          this.stageFile(file);
+          this.showToast(`Arquivo colado da área de transferência: ${file.name}`);
+          break;
+        }
+      }
     }
+  }
 
+  stageFile(file) {
+    const isImage = file.type.startsWith('image/');
     const reader = new FileReader();
     reader.onload = (e) => {
-      this.state.attachmentBase64 = e.target.result;
-      this.attachmentImg.src = e.target.result;
-      this.attachmentPreview.style.display = 'block';
+      this.state.stagedAttachment = {
+        file,
+        base64: e.target.result.split(',')[1],
+        dataUrl: e.target.result,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        isImage
+      };
+
+      this.attachmentPreviewName.textContent = file.name;
+      this.attachmentPreviewSize.textContent = `(${this.formatBytes(file.size)})`;
+      this.composerAttachmentPreview.style.display = 'flex';
     };
     reader.readAsDataURL(file);
   }
 
-  removeAttachment() {
-    this.state.attachmentBase64 = null;
-    this.attachmentImg.src = '';
-    this.attachmentPreview.style.display = 'none';
-    this.fileAttachmentInput.value = '';
+  clearAttachment() {
+    this.state.stagedAttachment = null;
+    this.composerAttachmentPreview.style.display = 'none';
+    if (this.fileAttachmentInput) this.fileAttachmentInput.value = '';
   }
 
-  async publishAnnouncement() {
-    const text = this.composerInput.value.trim();
-    if (!text) return;
+  startReply(messageId) {
+    const msg = this.state.messages.find(m => m.id === messageId);
+    if (!msg) return;
+
+    this.state.replyingTo = msg;
+    this.replyPreviewAuthor.textContent = `Respondendo a ${msg.authorName || 'Membro'}:`;
+    this.replyPreviewText.textContent = msg.text ? msg.text.slice(0, 70) : 'Anexo';
+    this.composerReplyPreview.style.display = 'flex';
+    if (this.composerInput) this.composerInput.focus();
+  }
+
+  clearReply() {
+    this.state.replyingTo = null;
+    this.composerReplyPreview.style.display = 'none';
+  }
+
+  // --- PUBLICAÇÃO DE MENSAGENS COM UPLOAD RESILIENTE ---
+  async sendMessage() {
+    const text = this.composerInput ? this.composerInput.value.trim() : '';
+    if (!text && !this.state.stagedAttachment) return;
 
     this.btnPublish.disabled = true;
 
     try {
+      let fileHash = null;
+      let fileName = null;
+      let fileSize = null;
+      let fileMime = null;
+      let fileChunksTotal = null;
+      let attachmentType = null;
+      let attachmentData = null;
+
+      // Se há um anexo em estágio
+      if (this.state.stagedAttachment) {
+        const att = this.state.stagedAttachment;
+        fileName = att.name;
+        fileSize = att.size;
+        fileMime = att.type;
+
+        // Se for imagem pequena (< 300KB), pode usar inline attachmentData
+        if (att.isImage && att.size < 300 * 1024) {
+          attachmentType = 'image';
+          attachmentData = att.dataUrl;
+        } else {
+          // Faz upload chunked com hash Merkle no nó
+          const uploadRes = await this.apiPost('/api/files/upload', {
+            filename: att.name,
+            dataBase64: att.base64,
+            communityId: this.state.activeCommunityId,
+            channelId: this.state.activeChannelId
+          });
+
+          if (uploadRes && uploadRes.fileHash) {
+            fileHash = uploadRes.fileHash;
+            fileChunksTotal = uploadRes.chunksTotal;
+            attachmentType = 'file';
+          }
+        }
+      }
+
       const payload = {
         communityId: this.state.activeCommunityId,
-        text,
-        attachmentType: this.state.attachmentBase64 ? 'image' : null,
-        attachmentData: this.state.attachmentBase64 || null
+        channelId: this.state.activeChannelId,
+        text: text || `[Arquivo anexado: ${fileName || 'anexo'}]`,
+        replyToId: this.state.replyingTo ? this.state.replyingTo.id : null,
+        attachmentType,
+        attachmentData,
+        fileHash,
+        fileName,
+        fileSize,
+        fileMime,
+        fileChunksTotal
       };
 
-      const res = await fetch('/api/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const res = await this.apiPost('/api/messages', payload);
+      if (res && res.message) {
+        this.composerInput.value = '';
+        this.clearAttachment();
+        this.clearReply();
+        this.appendMessage(res.message);
+      } else if (res && res.error) {
+        alert(res.error);
+      }
+    } catch (err) {
+      alert('Erro de conexão ao publicar mensagem.');
+    } finally {
+      this.btnPublish.disabled = false;
+    }
+  }
+
+  appendMessage(msg) {
+    if (this.state.messages.some(m => m.id === msg.id)) return;
+    this.state.messages.push(msg);
+    this.applyFilterAndSearch();
+  }
+
+  // --- REAÇÕES, FIXAÇÃO E EXCLUSÃO ---
+  async toggleReaction(messageId, emoji) {
+    try {
+      await this.apiPost(`/api/messages/${messageId}/react`, { emoji });
+      this.loadMessages();
+    } catch (e) {}
+  }
+
+  openReactionPalette(messageId) {
+    const emojis = ['👍', '❤️', '🎉', '👏', '🔥', '🤔', '🤝'];
+    const chosen = prompt(`Escolha um emoji para reagir:\n${emojis.join('  ')}`, '👍');
+    if (chosen) {
+      this.toggleReaction(messageId, chosen.trim());
+    }
+  }
+
+  async togglePin(messageId, pin) {
+    try {
+      const endpoint = pin ? `/api/messages/${messageId}/pin` : `/api/messages/${messageId}/unpin`;
+      await this.apiPost(endpoint, {});
+      this.loadMessages();
+      this.showToast(pin ? 'Mensagem fixada!' : 'Mensagem desafixada!');
+    } catch (e) {
+      alert('Apenas Administradores podem fixar mensagens.');
+    }
+  }
+
+  updatePinnedBanner() {
+    const pinned = this.state.messages.filter(m => m.is_pinned === 1);
+    if (pinned.length > 0) {
+      const latestPin = pinned[pinned.length - 1];
+      this.pinnedBar.style.display = 'flex';
+      this.pinnedSnippetText.textContent = `${latestPin.authorName}: ${latestPin.text.slice(0, 80)}`;
+      this.btnJumpPinned.onclick = () => {
+        const el = document.getElementById(`msg-${latestPin.id}`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
+      const isAdmin = this.state.user && (this.state.user.role === 'Administrador' || this.state.user.role === 'Moderador');
+      if (this.btnUnpinActive && isAdmin) {
+        this.btnUnpinActive.style.display = 'block';
+        this.btnUnpinActive.onclick = () => this.togglePin(latestPin.id, false);
+      }
+    } else {
+      this.pinnedBar.style.display = 'none';
+    }
+  }
+
+  async deleteMessage(messageId) {
+    if (!confirm('Deseja realmente excluir esta mensagem?')) return;
+    try {
+      await this.apiDelete(`/api/messages/${messageId}`);
+      this.state.messages = this.state.messages.filter(m => m.id !== messageId);
+      this.applyFilterAndSearch();
+      this.showToast('Mensagem excluída.');
+    } catch (e) {
+      alert('Sem permissão para excluir mensagem.');
+    }
+  }
+
+  // --- ENCAMINHAMENTO ---
+  startForward(messageId) {
+    const msg = this.state.messages.find(m => m.id === messageId);
+    if (!msg) return;
+
+    this.state.forwardingMsg = msg;
+    const authorEl = document.getElementById('forward-orig-author');
+    const snippetEl = document.getElementById('forward-orig-snippet');
+    if (authorEl) authorEl.textContent = msg.authorName || 'Membro';
+    if (snippetEl) snippetEl.textContent = msg.text ? msg.text.slice(0, 100) : 'Anexo';
+
+    // Preenche opções de canais da comunidade atual
+    const select = document.getElementById('forward-target-channel');
+    if (select) {
+      select.innerHTML = '';
+      this.state.channels.forEach(ch => {
+        const opt = document.createElement('option');
+        opt.value = ch.id;
+        opt.textContent = `# ${ch.name}`;
+        select.appendChild(opt);
+      });
+    }
+
+    this.openModal('modal-forward-msg');
+  }
+
+  async handleSubmitForward() {
+    if (!this.state.forwardingMsg) return;
+
+    const targetChannel = document.getElementById('forward-target-channel').value;
+    const comment = document.getElementById('forward-comment-input').value.trim();
+
+    try {
+      const res = await this.apiPost('/api/messages/forward', {
+        messageId: this.state.forwardingMsg.id,
+        targetCommunityId: this.state.activeCommunityId,
+        targetChannelId: targetChannel,
+        comment
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || 'Erro ao publicar comunicado.');
+      if (res && res.success) {
+        this.closeModal('modal-forward-msg');
+        this.showToast(`Mensagem encaminhada para #${targetChannel}!`);
+        if (targetChannel === this.state.activeChannelId) {
+          this.loadMessages();
+        }
+      } else {
+        alert(res.error || 'Erro ao encaminhar mensagem.');
+      }
+    } catch (e) {
+      alert('Erro de conexão ao encaminhar.');
+    }
+  }
+
+  // --- DOWNLOAD DE ARQUIVO RESILIENTE ---
+  downloadFile(fileHash, filename) {
+    const url = `/api/files/${fileHash}/download?filename=${encodeURIComponent(filename)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  openLightbox(dataUrl) {
+    const img = document.getElementById('lightbox-full-img');
+    if (img) img.src = dataUrl;
+    this.openModal('modal-image-lightbox');
+  }
+
+  // --- CONVITES, QR CODES E CÓDIGOS CURTOS ---
+  async openInviteModal() {
+    try {
+      const res = await this.apiGet(`/api/invites?communityId=${encodeURIComponent(this.state.activeCommunityId)}`);
+      let invite = res && res.invites && res.invites[0];
+
+      if (!invite) {
+        const createRes = await this.apiPost('/api/invites', {
+          communityId: this.state.activeCommunityId,
+          expiresInHours: 48
+        });
+        invite = createRes ? createRes.invite : null;
+      }
+
+      if (!invite) {
+        alert('Não foi possível gerar convite.');
         return;
       }
 
-      this.composerInput.value = '';
-      this.removeAttachment();
-      this.showToast('Comunicado assinado e replicado via P2P!');
+      const shortCodeLabel = document.getElementById('invite-short-code-label');
+      const urlInput = document.getElementById('invite-url-input');
+      const qrContainer = document.getElementById('invite-qrcode-container');
+
+      if (shortCodeLabel) shortCodeLabel.textContent = invite.code;
+      const inviteUrl = `${window.location.origin}/join/${invite.code}`;
+      if (urlInput) urlInput.value = inviteUrl;
+
+      // Renderiza QR Code vetorial SVG real
+      if (qrContainer && window.QRCodeGenerator) {
+        qrContainer.innerHTML = window.QRCodeGenerator.generateSVG(inviteUrl, 220);
+      }
+
+      this.openModal('modal-invite-share');
     } catch (e) {
-      alert('Erro de rede ao publicar comunicado.');
-    } finally {
-      this.btnPublish.disabled = false;
-      this.composerInput.focus();
+      alert('Erro ao carregar convites.');
     }
   }
 
-  filterMessagesByQuery(query) {
-    const q = query.toLowerCase().trim();
-    const bubbles = this.messagesStream.querySelectorAll('.wa-bubble-message');
-
-    bubbles.forEach(b => {
-      const text = b.textContent.toLowerCase();
-      b.style.display = text.includes(q) ? 'block' : 'none';
-    });
-  }
-
-  applyCategoryFilter(filter) {
-    if (filter === 'all' || filter === 'announcements') {
-      this.switchChannel('announcements');
-    } else if (filter === 'peers') {
-      this.openPeersModal();
+  copyInviteLink() {
+    const input = document.getElementById('invite-url-input');
+    if (input) {
+      navigator.clipboard.writeText(input.value);
+      this.showToast('Link de convite copiado!');
     }
   }
 
-  // --- MODAIS ---
-  openModal(modalId) {
-    const modal = document.getElementById(modalId);
-    if (modal) modal.classList.add('active');
-  }
-
-  closeModal(modalId) {
-    const modal = document.getElementById(modalId);
-    if (modal) modal.classList.remove('active');
-  }
-
-  async openPeersModal() {
-    this.openNetworkDashboard('nodes');
-  }
-
-  // --- PAINEL VISUAL: VISÃO DA COMUNIDADE & STATUS DA REDE P2P ---
-  async openNetworkDashboard(initialTab = 'overview') {
-    this.openModal('modal-network-dashboard');
-
-    if (initialTab) {
-      document.querySelectorAll('.dash-tab-btn').forEach(b => {
-        if (b.getAttribute('data-dash-tab') === initialTab) b.classList.add('active');
-        else b.classList.remove('active');
-      });
-      document.querySelectorAll('.dash-tab-pane').forEach(p => {
-        if (p.id === `pane-dash-${initialTab}`) p.classList.add('active');
-        else p.classList.remove('active');
-      });
-    }
-
-    await this.loadNetworkDashboardData();
-  }
-
-  async loadNetworkDashboardData() {
-    try {
-      const [resOverview, resNodes, resMembers, resDevices, resEvents] = await Promise.all([
-        fetch('/api/network/overview').then(r => r.json()).catch(() => null),
-        fetch('/api/network/nodes').then(r => r.json()).catch(() => ({ nodes: [] })),
-        fetch('/api/community/members').then(r => r.json()).catch(() => ({ members: [] })),
-        fetch('/api/community/devices').then(r => r.json()).catch(() => null),
-        fetch('/api/network/events').then(r => r.json()).catch(() => ({ events: [] }))
-      ]);
-
-      if (resOverview) this.state.dashboard.overview = resOverview;
-      if (resNodes) this.state.dashboard.nodes = resNodes.nodes || [];
-      if (resMembers) this.state.dashboard.members = resMembers.members || [];
-      if (resDevices) this.state.dashboard.devices = resDevices;
-      if (resEvents) this.state.dashboard.events = resEvents.events || [];
-
-      this.renderDashboardOverview();
-      this.renderTopologyMap();
-      this.renderMembersTable();
-      this.renderNodesTable();
-      this.renderDevicesSection();
-      this.renderTimeline();
-
-      if (this.dashLastUpdatedBadge) {
-        this.dashLastUpdatedBadge.textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
-      }
-
-      if (this.waNetworkBtnLabel && resOverview) {
-        const count = resOverview.onlineDesktopNodes || 0;
-        this.waNetworkBtnLabel.textContent = `Visão da Comunidade (${count})`;
-      }
-    } catch (err) {
-      console.warn('Erro ao carregar telemetria do painel:', err);
-    }
-  }
-
-  renderDashboardOverview() {
-    const ov = this.state.dashboard.overview;
-    if (!ov) return;
-
-    // 14 Cartões de Resumo da Rede
-    const setEl = (id, val) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = val;
-    };
-
-    setEl('card-desktop-online', ov.onlineDesktopNodes || 1);
-    setEl('card-desktop-known', `De ${ov.totalKnownNodes || 1} nós conhecidos`);
-    setEl('card-mobile-connected', ov.mobileDevicesConnected || 0);
-    setEl('card-web-sessions', ov.webSessionsActive || 1);
-    setEl('card-total-members', ov.totalMembers || 1);
-    setEl('card-members-breakdown', `${ov.administratorsCount || 1} Admins • ${ov.moderatorsCount || 0} Mods • ${ov.membersCount || 0} Membros`);
-    setEl('card-sync-messages', ov.syncMessagesCount || 0);
-    setEl('card-vps-state', ov.vpsStatus || 'ONLINE');
-    setEl('card-vps-sub', ov.vpsStatus === 'ONLINE' ? 'Bootstrap & Descoberta Ativos' : 'Modo Malha Autônoma Ativo');
-    setEl('card-p2p-state', ov.p2pMeshState === 'BOOTSTRAP_ASSISTED' ? 'ASSISTIDA' : 'AUTÔNOMA');
-    setEl('card-p2p-sub', ov.p2pMeshState === 'BOOTSTRAP_ASSISTED' ? 'Conexão Híbrida VPS + P2P' : 'Malha Pura entre Computadores');
-
-    const leaderName = ov.isCurrentNodeLeader ? `${ov.currentLeader} (Este Nó)` : (ov.currentLeader || '--');
-    setEl('card-leader-id', leaderName);
-    setEl('card-leader-term', `Termo ${ov.term || 1} • Quorum Ativo (Raft)`);
-
-    const syncTimeStr = ov.lastSyncTimestamp ? new Date(ov.lastSyncTimestamp).toLocaleTimeString('pt-BR') : '--:--';
-    setEl('card-last-sync', syncTimeStr);
-    setEl('card-direct-connections', ov.directConnectionsCount || 0);
-    setEl('card-relay-connections', ov.relayConnectionsCount || 0);
-    setEl('card-nat-type', ov.natType || 'NAT_ROUTED');
-
-    // Role Badge & Privacy View Mode
-    const userRole = this.state.user ? this.state.user.role : 'Membro';
-    if (this.dashUserRoleBadge) {
-      this.dashUserRoleBadge.textContent = userRole;
-      this.dashUserRoleBadge.className = `dash-role-badge ${userRole === 'Administrador' ? 'admin' : (userRole === 'Moderador' ? 'mod' : 'member')}`;
-    }
-
-    const viewModePill = document.getElementById('dash-view-mode-pill');
-    if (viewModePill) {
-      if (userRole === 'Administrador') {
-        viewModePill.textContent = 'Modo: Completo (Administrador)';
-        viewModePill.style.background = 'rgba(0, 168, 132, 0.25)';
-        viewModePill.style.color = 'var(--wa-green)';
-      } else if (userRole === 'Moderador') {
-        viewModePill.textContent = 'Modo: Operacional (Moderador)';
-        viewModePill.style.background = 'rgba(59, 130, 246, 0.25)';
-        viewModePill.style.color = '#60a5fa';
-      } else {
-        viewModePill.textContent = 'Modo: Protegido & Anônimo (Membro)';
-        viewModePill.style.background = 'rgba(255, 255, 255, 0.1)';
-        viewModePill.style.color = 'var(--text-muted)';
-      }
-    }
-
-    // Indicadores de Funcionamento P2P (Requisito 6)
-    const indVpsDot = document.getElementById('ind-vps-dot');
-    const indVpsText = document.getElementById('ind-vps-text');
-    if (ov.vpsStatus === 'ONLINE') {
-      if (indVpsDot) indVpsDot.className = 'pulse-dot online';
-      if (indVpsText) indVpsText.textContent = 'Online';
+  shareNativeInvite() {
+    const input = document.getElementById('invite-url-input');
+    if (navigator.share && input) {
+      navigator.share({
+        title: 'Convite para Comunidade Resiliente',
+        text: 'Entre no nosso canal seguro e descentralizado:',
+        url: input.value
+      }).catch(() => {});
     } else {
-      if (indVpsDot) indVpsDot.className = 'pulse-dot warning';
-      if (indVpsText) indVpsText.textContent = 'Offline (Malha Autônoma)';
+      this.copyInviteLink();
     }
-
-    setEl('ind-mesh-text', `${ov.onlineDesktopNodes || 1} conectados`);
-    setEl('ind-dht-text', 'Ativa (RFC 5389 STUN + PEX)');
-    setEl('ind-relay-text', ov.relayConnectionsCount > 0 ? `${ov.relayConnectionsCount} Ativo(s)` : 'Disponível');
-    setEl('ind-sync-text', '100% Atualizada (Cadeia Causal)');
-    setEl('ind-quorum-text', `Ativo (Termo ${ov.term || 1})`);
-    setEl('ind-pending-text', '0');
-    setEl('ind-reconnect-text', 'Ativa (Ciclo 10s)');
-    setEl('ind-election-text', `Termo ${ov.term || 1} Consensuado`);
-    setEl('ind-errors-text', '0 detectados');
   }
 
-  renderTopologyMap() {
-    const svg = document.getElementById('dash-topology-svg');
-    if (!svg) return;
-
-    const ov = this.state.dashboard.overview || {};
-    const nodes = this.state.dashboard.nodes || [];
-    const devices = this.state.dashboard.devices || {};
-
-    svg.innerHTML = '';
-
-    // Dimensões do Canvas SVG
-    const width = 800;
-    const height = 450;
-    const centerX = 400;
-    const centerY = 225;
-
-    const nodesData = [];
-    const linksData = [];
-
-    // 1. Nó Central: Comunidade Resiliente
-    nodesData.push({
-      id: 'community-core',
-      name: 'Comunidade Resiliente',
-      shortId: 'core',
-      role: 'Centro da Malha',
-      type: 'core',
-      x: centerX,
-      y: centerY,
-      icon: '🛡️',
-      color: '#00a884',
-      status: 'Conectado',
-      method: 'Causal Hash Chain'
-    });
-
-    // 2. Nó VPS Bootstrap
-    const vpsIsOnline = ov.vpsStatus === 'ONLINE';
-    const vpsNode = {
-      id: 'vps-bootstrap',
-      name: 'VPS Bootstrap Central',
-      shortId: 'vps',
-      role: 'Sinalização & Relay',
-      type: 'vps',
-      x: centerX,
-      y: centerY - 140,
-      icon: '☁️',
-      color: vpsIsOnline ? '#22c55e' : '#64748b',
-      status: vpsIsOnline ? 'Online (Acessível)' : 'Offline (Malha Autônoma Ativa)',
-      method: 'WebSocket / STUN Relay'
-    };
-    nodesData.push(vpsNode);
-    linksData.push({
-      from: 'community-core',
-      to: 'vps-bootstrap',
-      isRelay: false,
-      color: vpsIsOnline ? '#00a884' : '#475569',
-      dashed: !vpsIsOnline
-    });
-
-    // 3. Este Nó Local (Desktop)
-    const localNode = {
-      id: 'local-desktop-node',
-      name: `Este Computador (${this.state.user ? this.state.user.username : 'Desktop'})`,
-      shortId: (ov.currentLeader ? ov.currentLeader.slice(0, 8) : 'local'),
-      role: this.state.user ? this.state.user.role : 'Membro',
-      type: 'desktop-local',
-      x: centerX - 160,
-      y: centerY,
-      icon: '💻',
-      color: '#22c55e',
-      status: 'Online (Ativo)',
-      method: 'Direto (Local Daemon)'
-    };
-    nodesData.push(localNode);
-    linksData.push({
-      from: 'community-core',
-      to: 'local-desktop-node',
-      isRelay: false,
-      color: '#22c55e',
-      dashed: false
-    });
-
-    // 4. Outros Nós Desktop da Malha
-    const totalDesktops = Math.max(1, nodes.length);
-    const peerNodes = nodes.length > 0 ? nodes : [
-      { shortId: 'node_alpha', role: 'Membro', connectionMethod: 'direct' }
-    ];
-
-    peerNodes.forEach((peer, idx) => {
-      const angle = (idx + 1) * (Math.PI / (peerNodes.length + 1)) - (Math.PI / 2);
-      const px = centerX + 180 * Math.cos(angle);
-      const py = centerY + 110 * Math.sin(angle);
-      const isRelay = peer.connectionMethod === 'relay';
-
-      const pNode = {
-        id: `peer-${idx}`,
-        name: `Nó Desktop ${idx + 1}`,
-        shortId: peer.shortId || `node_${idx + 1}`,
-        role: peer.role || 'Membro',
-        type: 'desktop-peer',
-        x: px,
-        y: py,
-        icon: '💻',
-        color: isRelay ? '#3b82f6' : '#22c55e',
-        status: isRelay ? 'Conectado via Relay' : 'Conectado Direto (STUN)',
-        method: isRelay ? 'Relay Forwarding' : 'P2P Direct'
-      };
-      nodesData.push(pNode);
-      linksData.push({
-        from: 'community-core',
-        to: pNode.id,
-        isRelay,
-        color: isRelay ? '#3b82f6' : '#22c55e',
-        dashed: isRelay
-      });
-    });
-
-    // 5. Celulares Conectados (se houver)
-    const mobileCount = devices.mobileCount || ov.mobileDevicesConnected || 0;
-    if (mobileCount > 0) {
-      const mobNode = {
-        id: 'mobile-group',
-        name: `${mobileCount} Celular(es) Conectado(s)`,
-        shortId: `mob_${mobileCount}`,
-        role: 'Membro / Leitura Móvel',
-        type: 'mobile',
-        x: centerX - 130,
-        y: centerY + 120,
-        icon: '📱',
-        color: '#10b981',
-        status: 'Online (Web Push Ativo)',
-        method: 'PWA / Mobile Bridge'
-      };
-      nodesData.push(mobNode);
-      linksData.push({
-        from: 'local-desktop-node',
-        to: 'mobile-group',
-        isRelay: false,
-        color: '#10b981',
-        dashed: true
-      });
-    }
-
-    // 6. Páginas Web / PWA
-    const webCount = devices.webCount || ov.webSessionsActive || 1;
-    const webNode = {
-      id: 'web-sessions-group',
-      name: `${webCount} Página(s) Web Ativa(s)`,
-      shortId: `web_${webCount}`,
-      role: 'Leitura / Visualização',
-      type: 'web',
-      x: centerX + 130,
-      y: centerY + 120,
-      icon: '🌐',
-      color: '#8b5cf6',
-      status: 'Sessão Web Local',
-      method: 'WebSocket /live'
-    };
-    nodesData.push(webNode);
-    linksData.push({
-      from: 'local-desktop-node',
-      to: 'web-sessions-group',
-      isRelay: false,
-      color: '#8b5cf6',
-      dashed: true
-    });
-
-    // Renderiza Linhas de Conexão no SVG
-    linksData.forEach(link => {
-      const fromNode = nodesData.find(n => n.id === link.from);
-      const toNode = nodesData.find(n => n.id === link.to);
-      if (!fromNode || !toNode) return;
-
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', fromNode.x);
-      line.setAttribute('y1', fromNode.y);
-      line.setAttribute('x2', toNode.x);
-      line.setAttribute('y2', toNode.y);
-      line.setAttribute('stroke', link.color);
-      line.setAttribute('stroke-width', link.isRelay ? '2' : '2.5');
-      if (link.dashed) {
-        line.setAttribute('stroke-dasharray', '6,5');
-      }
-      line.setAttribute('opacity', '0.75');
-      svg.appendChild(line);
-    });
-
-    // Renderiza Nós no SVG
-    nodesData.forEach(node => {
-      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.setAttribute('style', 'cursor: pointer;');
-      group.setAttribute('transform', `translate(${node.x}, ${node.y})`);
-
-      // Círculo com Glow
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('r', node.type === 'core' ? '28' : '22');
-      circle.setAttribute('fill', '#202c33');
-      circle.setAttribute('stroke', node.color);
-      circle.setAttribute('stroke-width', '3');
-      group.appendChild(circle);
-
-      // Ícone do Nó
-      const iconText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      iconText.setAttribute('text-anchor', 'middle');
-      iconText.setAttribute('dy', '6');
-      iconText.setAttribute('font-size', node.type === 'core' ? '18' : '15');
-      iconText.textContent = node.icon;
-      group.appendChild(iconText);
-
-      // Legenda do Nó
-      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.setAttribute('text-anchor', 'middle');
-      label.setAttribute('dy', node.type === 'core' ? '44' : '36');
-      label.setAttribute('fill', '#e9edef');
-      label.setAttribute('font-size', '11');
-      label.setAttribute('font-weight', '600');
-      label.textContent = node.name.length > 22 ? node.name.slice(0, 20) + '...' : node.name;
-      group.appendChild(label);
-
-      // Evento de Clique para exibir Popover Seguro
-      group.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.showNodePopover(node);
-      });
-
-      svg.appendChild(group);
-    });
-  }
-
-  showNodePopover(node) {
-    const popover = document.getElementById('dash-node-popover');
-    if (!popover) return;
-
-    document.getElementById('popover-node-name').textContent = node.name;
-    document.getElementById('popover-node-id').textContent = node.shortId;
-    document.getElementById('popover-node-role').textContent = node.role;
-    document.getElementById('popover-node-method').textContent = node.method;
-    document.getElementById('popover-node-status').textContent = node.status;
-
-    popover.style.display = 'block';
-  }
-
-  renderMembersTable() {
-    const tbody = document.getElementById('dash-members-tbody');
-    if (!tbody) return;
-
-    tbody.innerHTML = '';
-    const members = this.state.dashboard.members || [];
-    const userRole = this.state.user ? this.state.user.role : 'Membro';
-    const currentUserId = this.state.user ? this.state.user.id : null;
-
-    // Filtros
-    let filtered = members.filter(m => {
-      // Busca
-      if (this.state.memberSearchQuery) {
-        const q = this.state.memberSearchQuery;
-        const matchesName = (m.username || '').toLowerCase().includes(q);
-        if (!matchesName) return false;
-      }
-
-      // Chip
-      const f = this.state.memberFilter;
-      if (f === 'all') return true;
-      if (f === 'online') return m.status === 'active';
-      if (f === 'offline') return m.status !== 'active';
-      if (f === 'admin') return m.role === 'Administrador';
-      if (f === 'moderator') return m.role === 'Moderador';
-      if (f === 'member') return m.role === 'Membro';
-      if (f === 'desktop') return (m.deviceType || '').includes('Desktop');
-      if (f === 'mobile') return (m.deviceType || '').includes('Celular');
-      if (f === 'web') return (m.deviceType || '').includes('Web');
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">Nenhum membro encontrado com os filtros atuais.</td></tr>`;
-      return;
-    }
-
-    filtered.forEach(m => {
-      const tr = document.createElement('tr');
-
-      // Anonimização segura para membros comuns (Requisito de Privacidade 8)
-      let displayName = m.username;
-      if (userRole === 'Membro' && m.id !== currentUserId && m.role !== 'Administrador') {
-        const shortHash = m.id.slice(-4);
-        displayName = `Membro Conectado (#${shortHash})`;
-      }
-
-      const roleBadge = m.role === 'Administrador'
-        ? `<span class="dash-role-badge" style="background: rgba(0, 168, 132, 0.2); color: var(--wa-green);">Administrador</span>`
-        : (m.role === 'Moderador'
-          ? `<span class="dash-role-badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">Moderador</span>`
-          : `<span class="dash-role-badge" style="background: rgba(255, 255, 255, 0.08); color: var(--text-muted);">Membro</span>`);
-
-      const statusBadge = m.status === 'active'
-        ? `<span style="color: #22c55e; font-weight: 600;">● Online</span>`
-        : `<span style="color: #94a3b8;">○ Offline</span>`;
-
-      tr.innerHTML = `
-        <td>
-          <div style="font-weight: 600;">${this.escapeHtml(displayName)}</div>
-          <div style="font-size: 0.72rem; color: var(--text-dim); font-family: var(--font-mono);">${m.id ? m.id.slice(0, 10) + '...' : '--'}</div>
-        </td>
-        <td>${roleBadge}</td>
-        <td>${statusBadge}</td>
-        <td>💻 Desktop / 📱 Celular</td>
-        <td style="color: var(--text-muted); font-size: 0.75rem;">Recentemente</td>
-        <td><span style="color: var(--wa-green); font-size: 0.75rem; font-weight: 600;">✓ 100% Sincronizado</span></td>
-        <td>1 ativo</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
-
-  renderNodesTable() {
-    const tbody = document.getElementById('dash-nodes-tbody');
-    if (!tbody) return;
-
-    tbody.innerHTML = '';
-    const nodes = this.state.dashboard.nodes || [];
-
-    if (nodes.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td>Este Computador (Nó Local)</td>
-          <td class="font-mono">local</td>
-          <td>${this.state.user ? this.state.user.role : 'Membro'}</td>
-          <td><span style="color: #22c55e;">● Ativo</span></td>
-          <td><span class="dash-chip" style="background: rgba(34, 197, 94, 0.2); color: #22c55e;">Direto (STUN Traversal)</span></td>
-          <td>Agora</td>
-          <td>100% em dia</td>
-          <td>${this.state.dashboard.overview ? this.state.dashboard.overview.syncMessagesCount || 0 : 0} msgs</td>
-          <td>CRDT/v2.1</td>
-          <td>Sessão Ativa</td>
-        </tr>
-      `;
-      return;
-    }
-
-    nodes.forEach((n, idx) => {
-      const tr = document.createElement('tr');
-      const isRelay = n.connectionMethod === 'relay';
-      const methodBadge = isRelay
-        ? `<span class="dash-chip" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">🔄 Relay (VPS)</span>`
-        : `<span class="dash-chip" style="background: rgba(34, 197, 94, 0.2); color: #22c55e;">⚡ Direto (STUN)</span>`;
-
-      tr.innerHTML = `
-        <td>Nó P2P ${idx + 1}</td>
-        <td class="font-mono">${n.shortId || n.nodeId.slice(0, 12)}</td>
-        <td>${n.role || 'Membro'}</td>
-        <td><span style="color: #22c55e;">● Conectado</span></td>
-        <td>${methodBadge}</td>
-        <td>Recentemente</td>
-        <td>100% em dia</td>
-        <td>Sincronizado</td>
-        <td>CRDT/v2.1</td>
-        <td>Conectado</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
-
-  renderDevicesSection() {
-    const dev = this.state.dashboard.devices || {};
-    const ov = this.state.dashboard.overview || {};
-
-    const mobEl = document.getElementById('dev-mobile-active');
-    if (mobEl) mobEl.textContent = `${dev.mobileCount || ov.mobileDevicesConnected || 0} Conectados`;
-
-    const webEl = document.getElementById('dev-web-active');
-    if (webEl) webEl.textContent = `${dev.webCount || ov.webSessionsActive || 1} Sessões`;
-
-    const deskEl = document.getElementById('dev-desktop-active');
-    if (deskEl) deskEl.textContent = `${dev.desktopCount || ov.onlineDesktopNodes || 1} Nós Desktop`;
-
-    const subsEl = document.getElementById('dev-push-subs-count');
-    if (subsEl) subsEl.textContent = `${dev.pushSubscribersCount || 0}`;
-
-    const sessEl = document.getElementById('dev-sessions-count');
-    if (sessEl) sessEl.textContent = `${dev.activeSessionsCount || 1}`;
-  }
-
-  renderTimeline() {
-    const feed = document.getElementById('dash-timeline-feed');
-    if (!feed) return;
-
-    feed.innerHTML = '';
-    const events = this.state.dashboard.events || [];
-
-    if (events.length === 0) {
-      feed.innerHTML = `
-        <div class="dash-timeline-item">
-          <span class="dash-timeline-dot green"></span>
-          <div class="dash-timeline-content">
-            <div class="dash-timeline-title">
-              <span>Malha P2P Inicializada com Sucesso</span>
-              <span class="dash-timeline-time">Agora</span>
-            </div>
-            <div class="dash-timeline-desc">O nó local inicializou a descoberta STUN e a cadeia de mensagens causal.</div>
-          </div>
-        </div>
-      `;
-      return;
-    }
-
-    events.forEach(ev => {
-      const item = document.createElement('div');
-      item.className = 'dash-timeline-item';
-
-      let dotColor = 'green';
-      if (ev.event_type.includes('RELAY')) dotColor = 'blue';
-      else if (ev.event_type.includes('VPS') || ev.event_type.includes('OFFLINE')) dotColor = 'amber';
-      else if (ev.event_type.includes('LEADER') || ev.event_type.includes('ELECTION')) dotColor = 'purple';
-
-      const timeStr = new Date(ev.timestamp).toLocaleTimeString('pt-BR');
-
-      item.innerHTML = `
-        <span class="dash-timeline-dot ${dotColor}"></span>
-        <div class="dash-timeline-content">
-          <div class="dash-timeline-title">
-            <span>${this.escapeHtml(ev.description || ev.event_type)}</span>
-            <span class="dash-timeline-time">${timeStr}</span>
-          </div>
-          <div class="dash-timeline-desc">Evento registrado na auditoria técnica da rede distribuída.</div>
-        </div>
-      `;
-      feed.appendChild(item);
-    });
-  }
-
-  async openAdminModal() {
-    this.openModal('modal-admin');
+  // --- OUTBOX / FILA OFFLINE ---
+  async loadOutboxStatus() {
     try {
-      const res = await fetch('/api/users');
-      const data = await res.json();
-      const listEl = document.getElementById('admin-users-list');
-      listEl.innerHTML = '';
+      const res = await this.apiGet('/api/outbox');
+      const count = res ? (res.count || 0) : 0;
+      this.state.pendingOutboxCount = count;
+      if (count > 0) {
+        this.outboxPendingBanner.style.display = 'flex';
+        this.outboxCountLabel.textContent = count;
+      } else {
+        this.outboxPendingBanner.style.display = 'none';
+      }
+    } catch (e) {}
+  }
 
-      (data.users || []).forEach(u => {
-        const row = document.createElement('div');
-        row.className = 'user-item-row';
-        row.innerHTML = `
+  async flushOutboxNow() {
+    try {
+      const res = await this.apiPost('/api/outbox/flush', {});
+      if (res && res.flushedCount > 0) {
+        this.showToast(`${res.flushedCount} comunicado(s) sincronizados com sucesso!`);
+      } else {
+        this.showToast('Nenhuma mensagem pendente ou aguardando conexão com outros nós.');
+      }
+      this.loadOutboxStatus();
+      this.loadMessages();
+    } catch (e) {}
+  }
+
+  // --- STATUS DA REDE E PAINEL VISÃO DA COMUNIDADE ---
+  async loadNetworkOverview() {
+    try {
+      const res = await this.apiGet('/api/network/overview');
+      if (res) {
+        this.state.network = res;
+        this.updateNetworkUI(res);
+      }
+    } catch (e) {}
+  }
+
+  updateNetworkUI(net) {
+    if (!net) return;
+
+    const isVpsOnline = net.vpsStatus === 'ONLINE';
+    if (isVpsOnline) {
+      this.vpsOfflineBanner.style.display = 'none';
+      this.railMeshDot.className = 'pulse-dot online';
+      this.chatStatusDot.className = 'pulse-dot online';
+    } else {
+      this.vpsOfflineBanner.style.display = 'flex';
+      this.railMeshDot.className = 'pulse-dot relay';
+      this.chatStatusDot.className = 'pulse-dot relay';
+    }
+
+    const peerCount = net.connectedNodesCount || 0;
+    this.cp2pNetworkBtnLabel.textContent = `Visão da Comunidade (${peerCount})`;
+
+    const vpsStatusEl = document.getElementById('dash-vps-status');
+    if (vpsStatusEl) {
+      vpsStatusEl.textContent = net.vpsStatus;
+      vpsStatusEl.style.color = isVpsOnline ? 'var(--cp2p-online)' : 'var(--cp2p-offline)';
+    }
+
+    const meshModeEl = document.getElementById('dash-mesh-mode');
+    if (meshModeEl) meshModeEl.textContent = net.p2pMeshState;
+
+    const nodesCountEl = document.getElementById('dash-nodes-count');
+    if (nodesCountEl) nodesCountEl.textContent = peerCount;
+
+    const msgsCountEl = document.getElementById('dash-msgs-count');
+    if (msgsCountEl) msgsCountEl.textContent = net.syncMessagesCount || 0;
+
+    const natTypeEl = document.getElementById('dash-nat-type');
+    if (natTypeEl) natTypeEl.textContent = `${net.natType || 'Direto'} (${net.externalIp || 'P2P'})`;
+  }
+
+  async openNetworkDashboard(targetTab = null) {
+    await this.loadNetworkOverview();
+    await this.loadPeersList();
+    await this.loadMembersList();
+    await this.loadJoinRequests();
+    await this.loadNetworkEvents();
+
+    if (targetTab) {
+      const btn = document.querySelector(`[data-tab="${targetTab}"]`);
+      if (btn) btn.click();
+    }
+    this.openModal('modal-network-dashboard');
+  }
+
+  async loadPeersList() {
+    const container = document.getElementById('dash-peers-list');
+    if (!container) return;
+    try {
+      const res = await this.apiGet('/api/network/nodes');
+      const nodes = (res && res.nodes) ? res.nodes : [];
+      if (nodes.length === 0) {
+        container.innerHTML = '<p style="color: var(--cp2p-text-muted);">Nenhum outro nó conectado diretamente neste momento.</p>';
+        return;
+      }
+
+      container.innerHTML = nodes.map(n => `
+        <div style="background: var(--cp2p-bg-input); padding: 8px 12px; border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center;">
           <div>
-            <div class="user-item-name">${this.escapeHtml(u.username)}</div>
-            <div style="font-size: 0.72rem; color: var(--text-muted);">${u.role} • ${u.status}</div>
+            <strong>${this.escapeHtml(n.shortId)}</strong>
+            <span style="font-size: 0.74rem; color: var(--cp2p-text-dim); margin-left: 8px;">${n.host}:${n.port}</span>
           </div>
-          <div class="user-item-actions">
-            ${u.role !== 'Administrador' ? `<button class="btn-sm-action" onclick="app.updateRole('${u.id}', 'Administrador')">Promover a Admin</button>` : ''}
-            ${u.status !== 'revoked' ? `<button class="btn-sm-action danger" onclick="app.revokeUser('${u.id}')">Revogar & Rotacionar Chave</button>` : ''}
+          <span style="font-size: 0.74rem; padding: 2px 8px; border-radius: var(--radius-full); background: rgba(16, 185, 129, 0.2); color: var(--cp2p-online);">
+            ${n.connectionMethod}
+          </span>
+        </div>
+      `).join('');
+    } catch (e) {}
+  }
+
+  async loadMembersList() {
+    const container = document.getElementById('dash-members-list');
+    if (!container) return;
+    try {
+      const res = await this.apiGet('/api/community/members');
+      const members = (res && res.members) ? res.members : [];
+      container.innerHTML = members.map(m => `
+        <div style="background: var(--cp2p-bg-input); padding: 8px 12px; border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong>${this.escapeHtml(m.username)}</strong>
+            <span style="font-size: 0.72rem; color: var(--cp2p-text-dim); margin-left: 8px;">${m.shortPublicKey || ''}</span>
           </div>
-        `;
-        listEl.appendChild(row);
-      });
+          <span style="font-size: 0.74rem; font-weight: 600; color: var(--cp2p-primary);">
+            ${m.role}
+          </span>
+        </div>
+      `).join('');
     } catch (e) {}
   }
 
-  async updateRole(userId, newRole) {
-    if (!confirm(`Confirma alterar papel do usuário para ${newRole}?`)) return;
+  async loadJoinRequests() {
+    const container = document.getElementById('dash-join-requests-list');
+    if (!container) return;
     try {
-      const res = await fetch('/api/admin/role', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, newRole })
-      });
-      if (res.ok) {
-        this.showToast('Papel alterado com sucesso!');
-        this.openAdminModal();
+      const res = await this.apiGet(`/api/join-requests?communityId=${encodeURIComponent(this.state.activeCommunityId)}`);
+      const requests = (res && res.requests) ? res.requests : [];
+      if (requests.length === 0) {
+        container.innerHTML = '<p style="color: var(--cp2p-text-muted);">Nenhuma solicitação de entrada pendente.</p>';
+        return;
       }
+
+      container.innerHTML = requests.map(r => `
+        <div style="background: var(--cp2p-bg-input); padding: 10px 14px; border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong>${this.escapeHtml(r.username)}</strong>
+            <div style="font-size: 0.74rem; color: var(--cp2p-text-dim);">Convite: ${this.escapeHtml(r.invite_code || 'Direto')}</div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn-primary" style="padding: 4px 10px; font-size: 0.76rem;" onclick="app.reviewJoinRequest('${r.id}', 'approved')">Aprovar</button>
+            <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.76rem;" onclick="app.reviewJoinRequest('${r.id}', 'rejected')">Rejeitar</button>
+          </div>
+        </div>
+      `).join('');
     } catch (e) {}
   }
 
-  async revokeUser(userId) {
-    if (!confirm('ATENÇÃO: Revogar o usuário gerará uma NOVA ÉPOCA CRIPTOGRÁFICA (Key Rotation). O membro revogado não poderá ler mensagens futuras. Deseja continuar?')) return;
+  async reviewJoinRequest(requestId, status) {
     try {
-      const res = await fetch('/api/admin/revoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        this.showToast(data.message || 'Membro revogado e chave rotacionada!');
-        this.openAdminModal();
-      }
+      await this.apiPost(`/api/join-requests/${requestId}/review`, { status });
+      this.showToast(status === 'approved' ? 'Membro aprovado com sucesso!' : 'Solicitação rejeitada.');
+      this.loadJoinRequests();
+      this.loadMembersList();
+    } catch (e) {
+      alert('Apenas Administradores podem revisar solicitações.');
+    }
+  }
+
+  async loadNetworkEvents() {
+    const container = document.getElementById('dash-events-list');
+    if (!container) return;
+    try {
+      const res = await this.apiGet('/api/network/events');
+      const events = (res && res.events) ? res.events : [];
+      container.innerHTML = events.map(ev => `
+        <div style="border-bottom: 1px solid var(--cp2p-border); padding: 4px 0;">
+          <span style="color: var(--cp2p-text-dim);">${new Date(ev.timestamp).toLocaleTimeString()}</span>
+          <strong style="color: var(--cp2p-primary); margin: 0 6px;">[${ev.event_type}]</strong>
+          <span>${this.escapeHtml(ev.summary)}</span>
+        </div>
+      `).join('');
     } catch (e) {}
   }
 
+  // --- ARMAZENAMENTO E COTAS ---
+  async openStorageModal() {
+    try {
+      const res = await this.apiGet('/api/storage/settings');
+      if (res) {
+        document.getElementById('storage-total-msgs').textContent = res.totalMessages || 0;
+        document.getElementById('storage-total-chunks').textContent = res.totalFileChunks || 0;
+        document.getElementById('storage-used-mb').textContent = `${res.totalChunkMB || 0} MB`;
+        document.getElementById('storage-policy-select').value = res.policy || 'all';
+        document.getElementById('storage-max-mb').value = res.maxStorageMB || 500;
+      }
+      this.openModal('modal-storage-settings');
+    } catch (e) {}
+  }
+
+  async handleSaveStorageSettings() {
+    const policy = document.getElementById('storage-policy-select').value;
+    const maxStorageMB = document.getElementById('storage-max-mb').value;
+
+    try {
+      const res = await this.apiPost('/api/storage/settings', { policy, maxStorageMB });
+      if (res && res.success) {
+        this.closeModal('modal-storage-settings');
+        this.showToast('Configurações de armazenamento salvas!');
+      } else {
+        alert(res.error || 'Apenas Administradores podem alterar configurações.');
+      }
+    } catch (e) {
+      alert('Erro ao salvar armazenamento.');
+    }
+  }
+
+  // --- AUDITORIA CRIPTOGRÁFICA ---
   async openAuditModal() {
-    this.openModal('modal-audit');
     try {
-      const res = await fetch('/api/audit');
-      const data = await res.json();
-      const listEl = document.getElementById('audit-logs-list');
-      listEl.innerHTML = '';
-
-      (data.logs || []).slice(0, 15).forEach(log => {
-        const item = document.createElement('div');
-        item.style.background = 'rgba(255,255,255,0.03)';
-        item.style.padding = '8px 10px';
-        item.style.borderRadius = '6px';
-        item.innerHTML = `
-          <div style="color: var(--wa-green); font-weight: 600;">${log.action}</div>
-          <div style="color: var(--text-muted); font-size: 0.7rem;">${new Date(log.timestamp).toLocaleString()}</div>
-          <div style="word-break: break-all; margin-top: 3px; color: #cbd5e1;">Hash: ${log.audit_hash}</div>
-        `;
-        listEl.appendChild(item);
-      });
+      const res = await this.apiGet('/api/audit');
+      const logs = (res && res.logs) ? res.logs : [];
+      const container = document.getElementById('audit-logs-container');
+      if (container) {
+        container.innerHTML = logs.map(l => `
+          <div style="background: var(--cp2p-bg-input); padding: 6px 10px; border-radius: var(--radius-xs);">
+            <span style="color: var(--cp2p-text-dim);">${new Date(l.timestamp).toLocaleString()}</span>
+            <strong style="color: var(--cp2p-primary); margin: 0 6px;">${this.escapeHtml(l.action)}</strong>
+            <span style="color: var(--cp2p-text-muted);">${this.escapeHtml(l.details)}</span>
+          </div>
+        `).join('');
+      }
+      this.openModal('modal-audit-view');
     } catch (e) {}
   }
 
-  async handleLogin() {
-    const username = document.getElementById('auth-username').value.trim();
-    const password = document.getElementById('auth-password').value.trim();
-
-    if (!username || !password) return alert('Preencha usuário e senha.');
-
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-
-      const data = await res.json();
-      if (!res.ok) return alert(data.error || 'Erro ao autenticar.');
-
-      this.updateUserUI(data.user);
-      this.closeModal('modal-auth');
-      this.showToast(`Bem-vindo, ${data.user.username}!`);
-      await this.loadCommunities();
-    } catch (e) {
-      alert('Erro de conexão ao autenticar.');
-    }
-  }
-
-  async handleRegister() {
-    const username = document.getElementById('auth-username').value.trim();
-    const password = document.getElementById('auth-password').value.trim();
-    const role = document.getElementById('auth-role').value;
-
-    if (!username || !password) return alert('Preencha usuário e senha.');
+  // --- WEBSOCKET REAL-TIME LIVE DISPATCH ---
+  connectLiveWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/live`;
 
     try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, role })
-      });
-
-      const data = await res.json();
-      if (!res.ok) return alert(data.error || 'Erro ao registrar.');
-
-      this.updateUserUI(data.user);
-      this.closeModal('modal-auth');
-      this.showToast(`Conta criada com sucesso!`);
-      await this.loadCommunities();
+      this.liveSocket = new WebSocket(wsUrl);
     } catch (e) {
-      alert('Erro de conexão ao registrar.');
+      this.reconnectTimer = setTimeout(() => this.connectLiveWebSocket(), 3000);
+      return;
+    }
+
+    this.liveSocket.onopen = () => {
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    };
+
+    this.liveSocket.onmessage = (event) => {
+      try {
+        const packet = JSON.parse(event.data);
+        this.handleLivePacket(packet);
+      } catch (err) {}
+    };
+
+    this.liveSocket.onclose = () => {
+      this.reconnectTimer = setTimeout(() => this.connectLiveWebSocket(), 3000);
+    };
+  }
+
+  handleLivePacket(packet) {
+    if (!packet || !packet.type) return;
+
+    switch (packet.type) {
+      case 'NEW_MESSAGE':
+        if (packet.message && packet.message.community_id === this.state.activeCommunityId) {
+          if (packet.message.channel_id === this.state.activeChannelId) {
+            this.appendMessage(packet.message);
+          }
+        }
+        break;
+
+      case 'MESSAGE_DELETED':
+        this.state.messages = this.state.messages.filter(m => m.id !== packet.messageId);
+        this.applyFilterAndSearch();
+        break;
+
+      case 'CHANNEL_CREATED':
+      case 'CHANNEL_UPDATED':
+      case 'CHANNEL_DELETED':
+        this.loadChannels();
+        break;
+
+      case 'NETWORK_UPDATE':
+      case 'PEER_CHANGE':
+      case 'VPS_STATUS_CHANGE':
+        this.loadNetworkOverview();
+        break;
+
+      case 'OUTBOX_SYNCED':
+        this.loadOutboxStatus();
+        this.loadMessages();
+        break;
     }
   }
 
-  showToast(message) {
-    const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
-    toast.className = 'toast';
-    toast.textContent = message;
-    container.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
-  }
+  // --- CRIAÇÃO DE CANAIS E COMUNIDADES ---
+  async handleCreateChannel() {
+    const name = document.getElementById('new-ch-name').value.trim();
+    const id = document.getElementById('new-ch-id').value.trim();
+    const icon = document.getElementById('new-ch-icon').value.trim();
+    const description = document.getElementById('new-ch-desc').value.trim();
+    const allowMemberPosts = document.getElementById('new-ch-allow-members').checked;
 
-  showBrowserNotification(notif) {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification(notif.title || 'Comunidade Resiliente', {
-        body: notif.body || 'Novo comunicado oficial assinado.',
-        icon: '/icons/icon-192.png'
+    if (!name || !id) {
+      alert('Nome e identificador do canal são obrigatórios.');
+      return;
+    }
+
+    try {
+      const res = await this.apiPost('/api/channels', {
+        id,
+        name,
+        icon: icon || '📢',
+        description,
+        allowMemberPosts,
+        communityId: this.state.activeCommunityId
       });
+
+      if (res && res.channel) {
+        this.closeModal('modal-create-channel');
+        this.showToast(`Canal #${name} criado com sucesso!`);
+        await this.loadChannels();
+        this.selectChannel(res.channel.id);
+      } else {
+        alert(res.error || 'Erro ao criar canal.');
+      }
+    } catch (e) {
+      alert('Apenas Administradores podem criar canais.');
     }
   }
 
+  async handleCreateCommunity() {
+    const name = document.getElementById('new-comm-name').value.trim();
+    const description = document.getElementById('new-comm-desc').value.trim();
+    if (!name) return alert('Digite o nome da comunidade.');
+
+    try {
+      const res = await this.apiPost('/api/communities', { name, description });
+      if (res && res.community) {
+        this.closeModal('modal-create-comm');
+        this.showToast(`Comunidade "${name}" criada com sucesso!`);
+        await this.loadCommunities();
+        this.selectCommunity(res.community.id);
+      } else {
+        alert(res.error || 'Erro ao criar comunidade.');
+      }
+    } catch (e) {
+      alert('Erro de conexão.');
+    }
+  }
+
+  async handleJoinCommunity() {
+    const code = document.getElementById('join-comm-code').value.trim();
+    if (!code) return alert('Digite o código ou link de convite.');
+
+    try {
+      const res = await this.apiPost('/api/communities/join', { inviteCode: code });
+      if (res && res.community) {
+        this.closeModal('modal-join-comm');
+        this.showToast(res.message || 'Você entrou na comunidade!');
+        await this.loadCommunities();
+        this.selectCommunity(res.community.id);
+      } else {
+        alert(res.error || 'Código de convite inválido ou expirado.');
+      }
+    } catch (e) {
+      alert('Erro de rede.');
+    }
+  }
+
+  // --- AUTENTICAÇÃO SIMPLES & PSEUDÔNIMA ---
+  async checkPseudonymAvailability(username) {
+    const statusEl = document.getElementById('pseudonym-validation-status');
+    const suggContainer = document.getElementById('pseudonym-suggestions-container');
+    const suggList = document.getElementById('pseudonym-suggestions-list');
+    if (!statusEl || !username || username.trim().length < 3) {
+      if (statusEl) statusEl.style.display = 'none';
+      if (suggContainer) suggContainer.style.display = 'none';
+      return;
+    }
+
+    try {
+      const res = await this.apiGet(`/api/auth/check-username?username=${encodeURIComponent(username.trim())}`);
+      statusEl.style.display = 'block';
+
+      if (res && res.available) {
+        statusEl.style.color = 'var(--cp2p-success)';
+        statusEl.textContent = '✓ Apelido disponível!';
+        if (suggContainer) suggContainer.style.display = 'none';
+      } else {
+        statusEl.style.color = 'var(--cp2p-warning)';
+        statusEl.textContent = `⚠️ ${res.error || 'Nome já em uso ou inválido.'}`;
+
+        if (res && Array.isArray(res.suggestions) && res.suggestions.length > 0) {
+          suggContainer.style.display = 'block';
+          suggList.innerHTML = '';
+          res.suggestions.forEach(sug => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'suggestion-chip';
+            chip.textContent = sug;
+            chip.addEventListener('click', () => {
+              const input = document.getElementById('auth-pseudonym');
+              if (input) {
+                input.value = sug;
+                this.checkPseudonymAvailability(sug);
+              }
+            });
+            suggList.appendChild(chip);
+          });
+        }
+      }
+    } catch (e) {
+      // Falha silenciosa de checagem online
+    }
+  }
+
+  async handleSimplePseudonymRegister() {
+    const input = document.getElementById('auth-pseudonym');
+    const username = input ? input.value.trim() : '';
+
+    if (!username || username.length < 3) {
+      return alert('Escolha um apelido com no mínimo 3 caracteres.');
+    }
+
+    // Verifica se há convite na URL ou no campo de convite
+    const urlParams = new URLSearchParams(window.location.search);
+    const inviteCode = urlParams.get('invite') || (document.getElementById('join-comm-code') ? document.getElementById('join-comm-code').value.trim() : null);
+
+    try {
+      const btn = document.getElementById('btn-enter-community');
+      if (btn) btn.disabled = true;
+
+      const res = await this.apiPost('/api/auth/register-simple', { username, inviteCode });
+      if (btn) btn.disabled = false;
+
+      if (res && res.success) {
+        if (res.token) {
+          localStorage.setItem('cp2p_token', res.token);
+          this.state.token = res.token;
+          this.state.user = res.user;
+          this.updateUserUI(res.user);
+        }
+
+        // Mostra a tela de sucesso com o código de recuperação
+        const simpleView = document.getElementById('auth-simple-form-view');
+        const successView = document.getElementById('auth-success-view');
+        const codeDisplay = document.getElementById('display-created-recovery-code');
+
+        if (simpleView) simpleView.style.display = 'none';
+        if (successView) successView.style.display = 'block';
+        if (codeDisplay && res.recoveryCode) {
+          codeDisplay.textContent = res.recoveryCode;
+        }
+
+        this.showToast('Usuário criado com sucesso.');
+        if (res.isPending) {
+          this.showToast('Solicitação de entrada enviada para aprovação do moderador.');
+        }
+      } else {
+        alert(res.error || 'Não foi possível cadastrar com este nome.');
+        if (res.suggestions) {
+          this.checkPseudonymAvailability(username);
+        }
+      }
+    } catch (e) {
+      const btn = document.getElementById('btn-enter-community');
+      if (btn) btn.disabled = false;
+      alert('Erro de conexão ao criar usuário.');
+    }
+  }
+
+  async handleRecoverAccount() {
+    const input = document.getElementById('recovery-input-code');
+    const code = input ? input.value.trim() : '';
+    if (!code) return alert('Digite o código de recuperação ou pareamento.');
+
+    try {
+      // Se for código de pareamento PAIR-
+      const endpoint = code.toUpperCase().startsWith('PAIR-') ? '/api/devices/pair' : '/api/auth/recover';
+      const payload = code.toUpperCase().startsWith('PAIR-') ? { pairingCode: code } : { recoveryCode: code };
+
+      const res = await this.apiPost(endpoint, payload);
+      if (res && res.success && res.token) {
+        localStorage.setItem('cp2p_token', res.token);
+        this.state.token = res.token;
+        this.state.user = res.user;
+        this.updateUserUI(res.user);
+        this.closeModal('modal-auth-profile');
+        this.showToast(res.message || 'Acesso restaurado com sucesso!');
+        this.loadInitialData();
+      } else {
+        alert(res.error || 'Código inválido ou expirado.');
+      }
+    } catch (e) {
+      alert('Erro de conexão ao recuperar acesso.');
+    }
+  }
+
+  async loadPairingCodeAndDevices() {
+    try {
+      // 1. Gera ou recupera código de pareamento
+      const pairRes = await this.apiPost('/api/devices/pairing-code', {});
+      if (pairRes && pairRes.pairingCode) {
+        const codeEl = document.getElementById('display-pairing-code');
+        if (codeEl) codeEl.textContent = pairRes.pairingCode;
+
+        const qrContainer = document.getElementById('pairing-qrcode-container');
+        if (qrContainer && pairRes.qrcodeSvg) {
+          qrContainer.innerHTML = pairRes.qrcodeSvg;
+        }
+      }
+
+      // 2. Carrega lista de dispositivos do usuário
+      const devRes = await this.apiGet('/api/devices');
+      const listEl = document.getElementById('user-devices-list');
+      if (listEl && devRes && Array.isArray(devRes.devices)) {
+        if (devRes.devices.length === 0) {
+          listEl.innerHTML = '<div style="font-size: 0.82rem; color: var(--cp2p-text-muted);">Nenhum dispositivo adicional registrado.</div>';
+        } else {
+          listEl.innerHTML = devRes.devices.map(d => `
+            <div class="device-item-row">
+              <div>
+                <strong style="font-size: 0.84rem; color: var(--cp2p-text);">
+                  ${d.device_type === 'mobile' ? '📱 Celular' : (d.device_type === 'desktop' ? '💻 Computador' : '🌐 Web')}
+                </strong>
+                <div style="font-size: 0.74rem; color: var(--cp2p-text-muted);">
+                  Sessão: ${d.session_id.slice(0, 12)} • Ativo: ${new Date(d.last_seen).toLocaleTimeString('pt-BR')}
+                </div>
+              </div>
+              <button class="btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; color: var(--cp2p-danger);" onclick="window.cp2pApp.revokeDevice('${d.session_id}')">
+                Revogar
+              </button>
+            </div>
+          `).join('');
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao carregar dados de pareamento:', e);
+    }
+  }
+
+  async revokeDevice(sessionId) {
+    if (!confirm('Deseja realmente desconectar e revogar este dispositivo?')) return;
+    try {
+      const res = await this.apiPost(`/api/devices/${sessionId}/revoke`, {});
+      if (res && res.success) {
+        this.showToast('Dispositivo revogado com sucesso.');
+        this.loadPairingCodeAndDevices();
+      }
+    } catch (e) {
+      alert('Erro ao revogar dispositivo.');
+    }
+  }
+
+  // --- SERVICE WORKER & NOTIFICAÇÕES ---
   registerServiceWorker() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
+  }
+
+  // --- HELPERS DE MODAIS E HTTP ---
+  openModal(id) {
+    const m = document.getElementById(id);
+    if (m) m.classList.add('open');
+  }
+
+  closeModal(id) {
+    const m = document.getElementById(id);
+    if (m) m.classList.remove('open');
+  }
+
+  showToast(message) {
+    const toast = document.createElement('div');
+    toast.style.position = 'fixed';
+    toast.style.bottom = '24px';
+    toast.style.right = '24px';
+    toast.style.background = 'rgba(15, 23, 42, 0.95)';
+    toast.style.color = '#ffffff';
+    toast.style.border = '1px solid var(--cp2p-primary)';
+    toast.style.borderRadius = '8px';
+    toast.style.padding = '10px 18px';
+    toast.style.fontSize = '0.86rem';
+    toast.style.fontWeight = '500';
+    toast.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
+    toast.style.zIndex = '9999';
+    toast.textContent = message;
+
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3200);
   }
 
   escapeHtml(str) {
     if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  async apiGet(url) {
+    const headers = {};
+    if (this.state.token) headers['Authorization'] = `Bearer ${this.state.token}`;
+    const res = await fetch(url, { headers });
+    return await res.json();
+  }
+
+  async apiPost(url, data) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.state.token) headers['Authorization'] = `Bearer ${this.state.token}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data)
+    });
+    return await res.json();
+  }
+
+  async apiDelete(url) {
+    const headers = {};
+    if (this.state.token) headers['Authorization'] = `Bearer ${this.state.token}`;
+    const res = await fetch(url, { method: 'DELETE', headers });
+    return await res.json();
   }
 }
 
-// Inicializa a aplicação
+// Inicializa a aplicação quando o DOM estiver pronto
 document.addEventListener('DOMContentLoaded', () => {
   window.app = new AppController();
 });

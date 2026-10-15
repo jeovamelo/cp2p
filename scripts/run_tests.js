@@ -26,6 +26,10 @@ const AuditLogger = require('../src/core/audit_logger');
 const NatStunResolver = require('../src/core/nat_stun');
 const { ProtocolPacket, MessageType } = require('../src/common/protocol');
 const SystemConfig = require('../src/common/config');
+const LinkPreviewService = require('../src/core/link_preview');
+const FileManager = require('../src/core/file_manager');
+const QRCodeGenerator = require('../src/common/qrcode');
+const P2PEngine = require('../src/core/p2p_engine');
 
 let passedTests = 0;
 let failedTests = 0;
@@ -398,6 +402,131 @@ async function runAllTests() {
     assert(vapidKey.length > 30);
   });
 
+  test('Diferencia tipos de notificação: arquivo, link, resposta e mensagem fixada', () => {
+    const notifService = new NotificationService(storage);
+
+    // Mensagem com arquivo
+    const fileMsg = {
+      id: 'msg-notif-file',
+      community_id: 'comm-1',
+      channel_id: 'documentos',
+      sequence: 20,
+      file_hash: 'hash123',
+      file_name: 'relatorio.pdf'
+    };
+    const fileAlert = notifService.dispatchForMessage(fileMsg, 'Comunidade Alpha');
+    assert.strictEqual(fileAlert.type, 'NEW_FILE');
+    assert(fileAlert.body.includes('relatorio.pdf'));
+
+    // Mensagem de resposta
+    const replyMsg = {
+      id: 'msg-notif-reply',
+      community_id: 'comm-1',
+      channel_id: 'conversas',
+      sequence: 21,
+      reply_to_id: 'msg-parent'
+    };
+    const replyAlert = notifService.dispatchForMessage(replyMsg, 'Comunidade Alpha');
+    assert.strictEqual(replyAlert.type, 'REPLY');
+
+    // Mensagem com link
+    const linkMsg = {
+      id: 'msg-notif-link',
+      community_id: 'comm-1',
+      channel_id: 'conversas',
+      sequence: 22,
+      link_preview: '{"title":"Link Seguro"}'
+    };
+    const linkAlert = notifService.dispatchForMessage(linkMsg, 'Comunidade Alpha');
+    assert.strictEqual(linkAlert.type, 'NEW_LINK');
+
+    // Mensagem fixada
+    const pinMsg = {
+      id: 'msg-notif-pin',
+      community_id: 'comm-1',
+      channel_id: 'avisos',
+      sequence: 23,
+      is_pinned: 1
+    };
+    const pinAlert = notifService.dispatchForMessage(pinMsg, 'Comunidade Alpha');
+    assert.strictEqual(pinAlert.type, 'MESSAGE_PINNED');
+  });
+
+  test('Filtra e bloqueia notificações para usuários com canal silenciado', async () => {
+    const notifService = new NotificationService(storage);
+
+    // Usuário 1 silencia canal "conversas"
+    storage.setChannelMute('usr-silent', 'comm-mute-test', 'conversas', true);
+
+    // Salva assinaturas push para dois usuários
+    storage.savePushSubscription({
+      endpoint: 'https://push.example.com/sub-silent',
+      userId: 'usr-silent',
+      p256dh: 'key1',
+      auth: 'auth1',
+      deviceType: 'mobile'
+    });
+    storage.savePushSubscription({
+      endpoint: 'https://push.example.com/sub-active',
+      userId: 'usr-active',
+      p256dh: 'key2',
+      auth: 'auth2',
+      deviceType: 'desktop'
+    });
+
+    const deliveredEndpoints = [];
+    notifService._deliverToSubscription = async (sub, payload) => {
+      deliveredEndpoints.push(sub.endpoint);
+      return true;
+    };
+
+    const msg = {
+      id: 'msg-mute-test-1',
+      community_id: 'comm-mute-test',
+      channel_id: 'conversas',
+      sequence: 1,
+      timestamp: Date.now()
+    };
+
+    notifService.dispatchForMessage(msg, 'Comunidade Mute');
+
+    // Deve entregar apenas para usr-active, pois usr-silent silenciou o canal
+    assert(deliveredEndpoints.includes('https://push.example.com/sub-active'));
+    assert(!deliveredEndpoints.includes('https://push.example.com/sub-silent'), 'Canal silenciado não deve receber push');
+
+    // Limpeza
+    storage.removePushSubscription('https://push.example.com/sub-silent');
+    storage.removePushSubscription('https://push.example.com/sub-active');
+  });
+
+  test('Despacha alertas genéricos de resiliência e estado de rede', () => {
+    const notifService = new NotificationService(storage);
+    let capturedPush = null;
+    notifService.on('push', (alert) => {
+      capturedPush = alert;
+    });
+
+    // Queda da VPS / Modo Offline
+    const offlineAlert = notifService.dispatchGenericAlert({
+      type: 'COMMUNITY_OFFLINE',
+      title: 'Comunidade em Modo Autônomo',
+      body: 'Servidor central inacessível. Continuando via malha direta entre nós.'
+    });
+
+    assert.strictEqual(offlineAlert.type, 'COMMUNITY_OFFLINE');
+    assert.strictEqual(capturedPush.title, 'Comunidade em Modo Autônomo');
+    assert.strictEqual(capturedPush.requiresDecryption, false);
+
+    // Retorno da Conexão
+    const restoreAlert = notifService.dispatchGenericAlert({
+      type: 'CONNECTION_RESTORED',
+      title: 'Conexão Restabelecida',
+      body: 'Reconectado à rede central e sincronizado com os nós.'
+    });
+
+    assert.strictEqual(restoreAlert.type, 'CONNECTION_RESTORED');
+  });
+
   // --- MÓDULO 6: RESOLUÇÃO DE NAT E STUN RFC 5389 ---
   console.log('\n\x1b[1m[6] Testes de Resolução de NAT e STUN RFC 5389\x1b[0m');
 
@@ -637,6 +766,953 @@ async function runAllTests() {
     const retrieved = storage.getMessageById('msg-local-resilience');
     assert(retrieved);
     assert.strictEqual(retrieved.encrypted_content, 'dados locais');
+  });
+
+  // --- MÓDULO 11: CANAIS, MENSAGENS ENRIQUECIDAS, REAÇÕES, CONVITES, OUTBOX E CHUNKING ---
+  console.log('\n\x1b[1m[11] Testes de Canais, Mensagens Enriquecidas, Reações, Convites, Outbox e Chunking\x1b[0m');
+
+  test('Criação automática e listagem dos 5 canais padrão por comunidade', () => {
+    const commId = 'comm-channels-test';
+    storage.saveCommunity({
+      id: commId,
+      name: 'Comunidade com Canais',
+      description: 'Teste',
+      genesis_admin_pubkey: 'pub_test',
+      current_epoch: 1,
+      created_at: Date.now()
+    });
+
+    const channels = storage.getChannelsByCommunity(commId);
+    assert.strictEqual(channels.length, 5);
+
+    const avisos = channels.find(c => c.id === 'avisos');
+    const conversas = channels.find(c => c.id === 'conversas');
+    assert(avisos && conversas);
+    assert.strictEqual(avisos.allow_member_posts, 0); // Padrão: somente admin publica em avisos
+    assert.strictEqual(conversas.allow_member_posts, 1); // Aberto a conversas
+  });
+
+  test('Atualização de permissões de canal e proteção contra exclusão do canal Avisos', () => {
+    const commId = 'comm-channels-test';
+    storage.updateChannelPermissions(commId, 'eventos', 1);
+    const eventos = storage.getChannel(commId, 'eventos');
+    assert.strictEqual(eventos.allow_member_posts, 1);
+
+    // Canal 'avisos' não pode ser deletado
+    const deletedAvisos = storage.deleteChannel(commId, 'avisos');
+    assert.strictEqual(deletedAvisos, false);
+
+    // Canal customizado pode ser criado e deletado
+    storage.createChannel({
+      id: 'temporario',
+      community_id: commId,
+      name: 'Canal Temp',
+      description: 'Para testes'
+    });
+    assert(storage.getChannel(commId, 'temporario'));
+    const deletedTemp = storage.deleteChannel(commId, 'temporario');
+    assert.strictEqual(deletedTemp, true);
+    assert.strictEqual(storage.getChannel(commId, 'temporario'), undefined);
+  });
+
+  test('Criação e validação de mensagem enriquecida com canal, resposta e metadados de arquivo', () => {
+    const commId = 'comm-channels-test';
+    const key = CryptoEngine.generateChannelKey();
+    const admin = CryptoEngine.generateEd25519KeyPair();
+
+    const mRich = chain.createSignedMessage({
+      communityId: commId,
+      channelId: 'documentos',
+      plaintext: 'Edital do encontro em PDF',
+      channelKeyHex: key,
+      authorPublicKey: admin.publicKey,
+      authorPrivateKey: admin.privateKey,
+      attachmentType: 'file',
+      attachmentData: null,
+      fileHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      fileName: 'edital_2026.pdf',
+      fileSize: 1048576,
+      fileMime: 'application/pdf',
+      fileChunksTotal: 2,
+      linkPreview: {
+        title: 'Documento Oficial',
+        description: 'Edital de Convocação',
+        url: 'https://cp2p.democracias.org/docs/edital'
+      }
+    });
+
+    assert.strictEqual(mRich.channel_id, 'documentos');
+    assert.strictEqual(mRich.file_name, 'edital_2026.pdf');
+    assert.strictEqual(mRich.file_size, 1048576);
+    assert(mRich.link_preview);
+
+    const fromDb = storage.getMessageById(mRich.id);
+    assert(fromDb);
+    assert.strictEqual(fromDb.channel_id, 'documentos');
+    assert.strictEqual(fromDb.file_name, 'edital_2026.pdf');
+  });
+
+  test('Fixação, desafixação, edição e exclusão lógica (soft delete) de mensagens', () => {
+    const commId = 'comm-channels-test';
+    const key = CryptoEngine.generateChannelKey();
+    const admin = CryptoEngine.generateEd25519KeyPair();
+
+    const msg = chain.createSignedMessage({
+      communityId: commId,
+      channelId: 'avisos',
+      plaintext: 'Aviso importante!',
+      channelKeyHex: key,
+      authorPublicKey: admin.publicKey,
+      authorPrivateKey: admin.privateKey
+    });
+
+    // Fixar
+    storage.pinMessage(msg.id, 'admin_user');
+    let pinned = storage.getPinnedMessages(commId);
+    assert.strictEqual(pinned.length, 1);
+    assert.strictEqual(pinned[0].id, msg.id);
+
+    // Desafixar
+    storage.unpinMessage(msg.id);
+    pinned = storage.getPinnedMessages(commId);
+    assert.strictEqual(pinned.length, 0);
+
+    // Edição
+    const newEnc = CryptoEngine.encryptAESGCM('Aviso atualizado!', key);
+    storage.editMessage(msg.id, newEnc.ciphertext, newEnc.iv, newEnc.tag);
+    const editedMsg = storage.getMessageById(msg.id);
+    assert.strictEqual(editedMsg.is_edited, 1);
+    assert(editedMsg.edited_at > 0);
+
+    // Soft delete
+    storage.softDeleteMessage(msg.id);
+    const activeMessages = storage.getMessagesByChannel(commId, 'avisos');
+    assert(!activeMessages.some(m => m.id === msg.id));
+  });
+
+  test('Adição, contagem agregada e remoção de reações com emojis', () => {
+    const mId = 'msg-reaction-test';
+    storage.addReaction(mId, 'usr-1', 'Maria', '👍');
+    storage.addReaction(mId, 'usr-2', 'João', '👍');
+    storage.addReaction(mId, 'usr-3', 'Ana', '❤️');
+
+    let reactions = storage.getReactionsForMessage(mId);
+    assert.strictEqual(reactions.length, 2);
+
+    const thumbs = reactions.find(r => r.emoji === '👍');
+    assert.strictEqual(thumbs.count, 2);
+    assert.strictEqual(thumbs.users.length, 2);
+
+    // Remoção de reação
+    storage.removeReaction(mId, 'usr-2', '👍');
+    reactions = storage.getReactionsForMessage(mId);
+    const updatedThumbs = reactions.find(r => r.emoji === '👍');
+    assert.strictEqual(updatedThumbs.count, 1);
+  });
+
+  test('Criação de convites amigáveis (CR-XXXX), validação de expiração e contagem de uso', () => {
+    const invite = storage.createInvite({
+      communityId: 'comm-channels-test',
+      createdBy: 'admin',
+      maxUses: 2,
+      expiresAt: Date.now() + 60000,
+      requiresApproval: 1
+    });
+
+    assert(invite.code.startsWith('CR-'));
+    assert.strictEqual(invite.requires_approval, 1);
+
+    // Uso 1
+    const use1 = storage.useInvite(invite.code);
+    assert.strictEqual(use1.valid, true);
+
+    // Uso 2
+    const use2 = storage.useInvite(invite.code);
+    assert.strictEqual(use2.valid, true);
+
+    // Uso 3 (deve falhar por limite de usos)
+    const use3 = storage.useInvite(invite.code);
+    assert.strictEqual(use3.valid, false);
+    assert.strictEqual(use3.reason, 'INVITE_MAX_USES_REACHED');
+  });
+
+  test('Fluxo de solicitações de entrada (Join Requests) e aprovação com promoção de papel', () => {
+    const commId = 'comm-channels-test';
+    // Cria usuário aspirante a membro
+    storage.createUser({
+      id: 'usr-newbie',
+      username: 'novato',
+      password_hash: 'hash',
+      public_key: 'pub_novato',
+      role: 'Visitante'
+    });
+
+    const req = storage.createJoinRequest({
+      communityId: commId,
+      userId: 'usr-newbie',
+      username: 'novato',
+      publicKey: 'pub_novato',
+      inviteCode: 'CR-1234'
+    });
+    assert.strictEqual(req.status, 'pending');
+
+    const pendingList = storage.getJoinRequests(commId, 'pending');
+    assert(pendingList.some(r => r.id === req.id));
+
+    // Aprovação pelo administrador
+    const reviewed = storage.reviewJoinRequest(req.id, 'approved', 'admin_user');
+    assert.strictEqual(reviewed.status, 'approved');
+
+    // Verifica que o usuário foi promovido a 'Membro'
+    const promotedUser = storage.getUserByUsername('novato');
+    assert.strictEqual(promotedUser.role, 'Membro');
+  });
+
+  test('Fila Outbox para resiliência e mensagens pendentes criadas offline', () => {
+    const outboxId = storage.queueOutbox({
+      communityId: 'comm-channels-test',
+      channelId: 'conversas',
+      payload: { text: 'Mensagem enviada sem internet', author: 'carlos' }
+    });
+
+    const pending = storage.getPendingOutbox();
+    assert(pending.length > 0);
+    const item = pending.find(p => p.id === outboxId);
+    assert(item);
+    assert.strictEqual(item.payload.text, 'Mensagem enviada sem internet');
+
+    // Atualiza status para sincronizando e depois remove
+    storage.updateOutboxStatus(outboxId, 'synced');
+    storage.removeOutbox(outboxId);
+    const pendingAfter = storage.getPendingOutbox();
+    assert(!pendingAfter.some(p => p.id === outboxId));
+  });
+
+  test('Fragmentação de arquivos em chunks (Chunking 512KB) com hashes de integridade', () => {
+    const fHash = 'hash_arquivo_grande_123';
+    storage.saveFileChunk({
+      fileHash: fHash,
+      chunkIndex: 0,
+      totalChunks: 2,
+      chunkHash: 'chunk_hash_0',
+      chunkSize: 524288,
+      chunkData: 'SGVsbG8gQ2h1bms='
+    });
+    storage.saveFileChunk({
+      fileHash: fHash,
+      chunkIndex: 1,
+      totalChunks: 2,
+      chunkHash: 'chunk_hash_1',
+      chunkSize: 200000,
+      chunkData: 'V29ybGQgQ2h1bms='
+    });
+
+    assert.strictEqual(storage.getStoredChunksCount(fHash), 2);
+    const chunks = storage.getFileChunks(fHash);
+    assert.strictEqual(chunks.length, 2);
+    assert.strictEqual(chunks[0].chunk_index, 0);
+    assert.strictEqual(chunks[1].chunk_index, 1);
+
+    storage.deleteFileChunks(fHash);
+    assert.strictEqual(storage.getStoredChunksCount(fHash), 0);
+  });
+
+  test('Políticas de armazenamento por nó (Storage Quotas) e silenciamento de canais', () => {
+    storage.setStorageSetting('storage_policy', 'messages_images');
+    storage.setStorageSetting('max_storage_mb', '250');
+
+    const summary = storage.getStorageUsageSummary();
+    assert.strictEqual(summary.policy, 'messages_images');
+    assert.strictEqual(summary.maxStorageMB, 250);
+
+    // Silenciamento por canal
+    storage.setChannelMute('usr-1', 'comm-1', 'conversas', true);
+    assert.strictEqual(storage.isChannelMuted('usr-1', 'comm-1', 'conversas'), true);
+    assert.strictEqual(storage.isChannelMuted('usr-1', 'comm-1', 'avisos'), false);
+
+    storage.setChannelMute('usr-1', 'comm-1', 'conversas', false);
+    assert.strictEqual(storage.isChannelMuted('usr-1', 'comm-1', 'conversas'), false);
+  });
+
+  // --- MÓDULO 12: PRÉ-VISUALIZAÇÃO DE LINKS (SSRF-SAFE), CHUNKING MERKLE E ENCAMINHAMENTO ---
+  console.log('\n\x1b[1m[12] Testes de Pré-Visualização de Links (SSRF), Chunking Merkle e Encaminhamento\x1b[0m');
+
+  test('Extração de URLs e proteção estrita contra SSRF (bloqueio de IPs privados e metadados)', () => {
+    // URLs maliciosas ou privadas devem ser estritamente bloqueadas
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://127.0.0.1:8080/admin'), false);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://localhost/secret'), false);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://169.254.169.254/latest/meta-data/'), false); // AWS/GCP metadata
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://10.0.0.5/internal'), false);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://192.168.1.1/router'), false);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://172.20.0.1/docker'), false);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://server.local/data'), false);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://admin:secret@example.com'), false); // Credenciais embutidas
+    assert.strictEqual(LinkPreviewService.isSafeUrl('file:///etc/passwd'), false);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('ftp://ftp.example.com'), false);
+
+    // URLs públicas legítimas devem ser permitidas
+    assert.strictEqual(LinkPreviewService.isSafeUrl('https://cp2p.democracias.org'), true);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('https://pt.wikipedia.org/wiki/P2P'), true);
+    assert.strictEqual(LinkPreviewService.isSafeUrl('http://example.com/noticias/artigo'), true);
+
+    // Extração no texto
+    const text = 'Confira o comunicado em https://cp2p.democracias.org e não acesse http://127.0.0.1';
+    const extracted = LinkPreviewService.extractUrls(text);
+    assert.strictEqual(extracted.length, 1);
+    assert.strictEqual(extracted[0], 'https://cp2p.democracias.org');
+  });
+
+  test('Extração e sanitização de metadados OpenGraph e HTML seguro', () => {
+    const sampleHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Portal da Comunidade</title>
+          <meta property="og:title" content="Encontro Nacional P2P 2026">
+          <meta property="og:description" content="Mobilização popular e descentralizada com criptografia soberana.">
+          <meta property="og:image" content="https://cp2p.democracias.org/banner.png">
+        </head>
+        <body>Conteúdo</body>
+      </html>
+    `;
+
+    const meta = LinkPreviewService.parseHtmlMetadata('https://cp2p.democracias.org/noticia', sampleHtml);
+    assert(meta);
+    assert.strictEqual(meta.title, 'Encontro Nacional P2P 2026');
+    assert.strictEqual(meta.description, 'Mobilização popular e descentralizada com criptografia soberana.');
+    assert.strictEqual(meta.image, 'https://cp2p.democracias.org/banner.png');
+
+    // Sanitização de HTML com scripts
+    const dirtyHtml = '<title><script>alert("hack")</script>Artigo Seguro</title>';
+    const dirtyMeta = LinkPreviewService.parseHtmlMetadata('https://cp2p.democracias.org', dirtyHtml);
+    assert(dirtyMeta);
+    assert(!dirtyMeta.title.includes('<script>'));
+  });
+
+  test('Sanitização de nomes de arquivo e prevenção contra Path Traversal', () => {
+    assert.strictEqual(FileManager.sanitizeFilename('../../etc/passwd'), 'passwd');
+    assert.strictEqual(FileManager.sanitizeFilename('..\\..\\Windows\\System32\\calc.exe'), 'calc.exe');
+    assert.strictEqual(FileManager.sanitizeFilename('plano & ação final!.pdf'), 'plano___a__o_final_.pdf');
+    assert.strictEqual(FileManager.sanitizeFilename(''), 'anexo_sem_nome');
+  });
+
+  test('Validação estrita de extensões, tipos MIME e bloqueio de executáveis perigosos', () => {
+    const dummyBuffer = Buffer.from('conteudo teste');
+
+    // Bloqueia .exe, .bat, .sh
+    const exeCheck = FileManager.validateFile(dummyBuffer, 'virus.exe');
+    assert.strictEqual(exeCheck.valid, false);
+
+    const batCheck = FileManager.validateFile(dummyBuffer, 'script.bat');
+    assert.strictEqual(batCheck.valid, false);
+
+    // Bloqueia falsificação de extensão (magic bytes)
+    const fakePng = FileManager.validateFile(dummyBuffer, 'foto.png');
+    assert.strictEqual(fakePng.valid, false);
+    assert(fakePng.error.includes('Assinatura binária incompatível'));
+
+    // Aceita PNG legítimo com header 89 50 4E 47 0D 0A 1A 0A
+    const realPngHeader = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00]);
+    const realPng = FileManager.validateFile(realPngHeader, 'legitimo.png');
+    assert.strictEqual(realPng.valid, true);
+    assert.strictEqual(realPng.mimeType, 'image/png');
+
+    // Aceita PDF legítimo com header %PDF
+    const pdfBuf = Buffer.from('%PDF-1.4 manifesto da comunidade');
+    const pdfCheck = FileManager.validateFile(pdfBuf, 'manifesto.pdf');
+    assert.strictEqual(pdfCheck.valid, true);
+    assert.strictEqual(pdfCheck.mimeType, 'application/pdf');
+  });
+
+  test('Fragmentação em chunks de 512KB (Chunking) com Merkle Hashes e reconstituição íntegra', () => {
+    // Gera buffer de 1.2 MB simulando arquivo grande
+    const largeSize = 1200 * 1024;
+    const largeBuffer = crypto.randomBytes(largeSize);
+    const originalHash = FileManager.calculateFileHash(largeBuffer);
+
+    // Fragmenta em chunks de 512KB
+    const chunked = FileManager.chunkBuffer(largeBuffer);
+    assert.strictEqual(chunked.totalChunks, 3); // 512KB + 512KB + 176KB
+    assert.strictEqual(chunked.fileHash, originalHash);
+
+    // Valida integridade individual de cada fragmento
+    for (const c of chunked.chunks) {
+      const cBuf = Buffer.from(c.chunkData, 'base64');
+      const expectedHash = crypto.createHash('sha256').update(cBuf).digest('hex');
+      assert.strictEqual(c.chunkHash, expectedHash);
+    }
+
+    // Reconstitui o arquivo a partir dos chunks
+    const reconstituted = FileManager.reassembleChunks(chunked.chunks, originalHash);
+    assert.strictEqual(reconstituted.length, largeSize);
+    assert(reconstituted.equals(largeBuffer));
+  });
+
+  test('Detecção de partes corrompidas ou ausentes na reconstituição de arquivo', () => {
+    const testBuf = crypto.randomBytes(600 * 1024); // 2 chunks
+    const chunked = FileManager.chunkBuffer(testBuf);
+
+    // Falha quando um chunk está ausente
+    const incompleteChunks = [chunked.chunks[0]];
+    assert.throws(() => {
+      FileManager.reassembleChunks(incompleteChunks, chunked.fileHash);
+    }, /Transferência incompleta/);
+
+    // Falha quando um chunk foi adulterado (bit-flip)
+    const corruptedChunks = JSON.parse(JSON.stringify(chunked.chunks));
+    corruptedChunks[1].chunkData = Buffer.from('adulterado').toString('base64');
+    assert.throws(() => {
+      FileManager.reassembleChunks(corruptedChunks, chunked.fileHash);
+    }, /corrompido: hash inválido/);
+  });
+
+  test('Criptografia e decifragem autenticada E2EE de arquivos (AES-256-GCM)', () => {
+    const secretBuffer = Buffer.from('Documento confidencial do diretório da comunidade');
+    const channelKey = CryptoEngine.generateChannelKey();
+
+    const enc = FileManager.encryptFileBuffer(secretBuffer, channelKey);
+    assert(enc.ciphertextBuffer && enc.ivHex && enc.tagHex);
+
+    const dec = FileManager.decryptFileBuffer(enc.ciphertextBuffer, enc.ivHex, enc.tagHex, channelKey, enc.originalHash);
+    assert(dec.equals(secretBuffer));
+  });
+
+  test('Encaminhamento de mensagens com proveniência e deduplicação de anexo', () => {
+    const commId = 'comm-forward-test';
+    const channelKey = CryptoEngine.generateChannelKey();
+    const admin = CryptoEngine.generateEd25519KeyPair();
+
+    // 1. Mensagem original no canal 'avisos' com arquivo anexado
+    const originalMsg = chain.createSignedMessage({
+      communityId: commId,
+      channelId: 'avisos',
+      plaintext: 'Cartilha oficial 2026',
+      channelKeyHex: channelKey,
+      authorPublicKey: admin.publicKey,
+      authorPrivateKey: admin.privateKey,
+      attachmentType: 'file',
+      fileHash: 'fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321',
+      fileName: 'cartilha.pdf',
+      fileSize: 524288,
+      fileMime: 'application/pdf'
+    });
+
+    // 2. Encaminha para o canal 'conversas'
+    const forwardedMsg = chain.createSignedMessage({
+      communityId: commId,
+      channelId: 'conversas',
+      plaintext: '[Encaminhado]: Cartilha oficial 2026',
+      channelKeyHex: channelKey,
+      authorPublicKey: admin.publicKey,
+      authorPrivateKey: admin.privateKey,
+      attachmentType: originalMsg.attachment_type,
+      forwardedFromChannelId: originalMsg.channel_id,
+      forwardedFromCommunityId: originalMsg.community_id,
+      forwardedOriginAuthor: 'Administrador',
+      // Deduplicação: reutiliza o mesmo fileHash sem criar arquivo duplicado
+      fileHash: originalMsg.file_hash,
+      fileName: originalMsg.file_name,
+      fileSize: originalMsg.file_size,
+      fileMime: originalMsg.file_mime
+    });
+
+    assert.strictEqual(forwardedMsg.channel_id, 'conversas');
+    assert.strictEqual(forwardedMsg.forwarded_from_channel_id, 'avisos');
+    assert.strictEqual(forwardedMsg.file_hash, originalMsg.file_hash);
+
+    // Ambos os registros no banco apontam para o mesmo fileHash físico
+    const origDb = storage.getMessageById(originalMsg.id);
+    const fwdDb = storage.getMessageById(forwardedMsg.id);
+    assert.strictEqual(origDb.file_hash, fwdDb.file_hash);
+  });
+
+  // --- MÓDULO 13: CONVITES AMIGÁVEIS, QR CODES EM SVG E FLUXO DE ENTRADA (ETAPA 4) ---
+  console.log('\n\x1b[1m[13] Testes de Convites Amigáveis, QR Codes em SVG e Entrada Fácil\x1b[0m');
+
+  test('Geração autônoma de QR Code em SVG sem dependências externas', () => {
+    const inviteUrl = 'https://cp2p.democracias.org/join/CR-7842';
+    const svg = QRCodeGenerator.generateSVG(inviteUrl, 256);
+
+    assert(typeof svg === 'string');
+    assert(svg.startsWith('<svg'));
+    assert(svg.includes('viewBox="0 0 256 256"'));
+    assert(svg.includes('<rect'));
+    assert(svg.endsWith('</svg>'));
+  });
+
+  test('Validação de convite expirado e recusa segura', () => {
+    const expiredInvite = storage.createInvite({
+      communityId: 'comm-invite-test',
+      createdBy: 'admin',
+      maxUses: 10,
+      expiresAt: Date.now() - 5000 // Expirado há 5 segundos
+    });
+
+    const attempt = storage.useInvite(expiredInvite.code);
+    assert.strictEqual(attempt.valid, false);
+    assert.strictEqual(attempt.reason, 'INVITE_EXPIRED');
+  });
+
+  test('Validação de convite com cota esgotada de acessos', () => {
+    const singleUseInvite = storage.createInvite({
+      communityId: 'comm-invite-test',
+      createdBy: 'admin',
+      maxUses: 1,
+      expiresAt: Date.now() + 60000
+    });
+
+    // 1º uso: aprovado
+    const use1 = storage.useInvite(singleUseInvite.code);
+    assert.strictEqual(use1.valid, true);
+
+    // 2º uso: esgotado
+    const use2 = storage.useInvite(singleUseInvite.code);
+    assert.strictEqual(use2.valid, false);
+    assert.strictEqual(use2.reason, 'INVITE_MAX_USES_REACHED');
+  });
+
+  test('Fluxo guiado de solicitação de entrada (Join Request) e aprovação com promoção para Membro', () => {
+    const commId = 'comm-invite-test';
+    // 1. Visitante cria perfil local
+    const newbie = storage.createUser({
+      id: 'usr-maria',
+      username: 'maria_silva',
+      password_hash: 'hash',
+      public_key: 'pub_maria_silva',
+      role: 'Visitante'
+    });
+    assert.strictEqual(newbie.role, 'Visitante');
+
+    // 2. Visitante solicita entrada usando código curto
+    const req = storage.createJoinRequest({
+      communityId: commId,
+      userId: newbie.id,
+      username: newbie.username,
+      publicKey: newbie.public_key,
+      inviteCode: 'CR-7842'
+    });
+    assert.strictEqual(req.status, 'pending');
+
+    // 3. Administrador revisa e aprova a solicitação
+    const reviewed = storage.reviewJoinRequest(req.id, 'approved', 'admin_gestor');
+    assert.strictEqual(reviewed.status, 'approved');
+
+    // 4. Perfil promovido a Membro ativo
+    const updatedUser = storage.getUserByUsername('maria_silva');
+    assert.strictEqual(updatedUser.role, 'Membro');
+  });
+
+  // --- MÓDULO 14: RESILIÊNCIA OFFLINE, OUTBOX E REPLICAÇÃO P2P DE CHUNKS (ETAPA 5) ---
+  console.log('\n\x1b[1m[14] Testes de Resiliência Offline, Outbox e Replicação P2P de Chunks\x1b[0m');
+  const notifService = new NotificationService(storage);
+  const auditLogger = new AuditLogger(storage);
+
+  test('Fila Outbox enfileira comunicado offline quando nó não possui pares conectados', () => {
+    const testEngine = new P2PEngine({
+      nodeId: 'node-test-offline-1',
+      p2pPort: 19871,
+      bootstrapNodes: [],
+      storage,
+      chain,
+      notificationService: notifService,
+      auditLogger
+    });
+
+    const testMsg = {
+      id: 'msg-offline-outbox-test-1',
+      community_id: 'comm-invite-test',
+      channel_id: 'avisos',
+      sequence: 99,
+      timestamp: Date.now()
+    };
+
+    // Publicação em nó desconectado
+    testEngine.publishMessage(testMsg);
+
+    const pending = storage.getPendingOutbox(10);
+    const found = pending.find(p => p.payload && p.payload.message && p.payload.message.id === testMsg.id);
+    assert(found, 'Mensagem publicada offline deveria estar na fila Outbox');
+    assert.strictEqual(found.status, 'pending');
+    assert.strictEqual(found.community_id, 'comm-invite-test');
+  });
+
+  test('Esvaziamento da fila Outbox (flushOutbox) com sucesso após retorno de conexão', () => {
+    const testEngine = new P2PEngine({
+      nodeId: 'node-test-flush-1',
+      p2pPort: 19872,
+      bootstrapNodes: [],
+      storage,
+      chain,
+      notificationService: notifService,
+      auditLogger
+    });
+
+    // Simula socket de par conectado e ativo (WebSocket.OPEN = 1)
+    let broadcastReceived = null;
+    const mockSocket = {
+      readyState: 1,
+      send: (data) => {
+        broadcastReceived = JSON.parse(data);
+      }
+    };
+    testEngine.peers.set('peer-connected-mock', mockSocket);
+
+    const flushed = testEngine.flushOutbox();
+    assert(flushed > 0, 'Deveria ter esvaziado pelo menos 1 mensagem pendente na outbox');
+    assert(broadcastReceived, 'Mensagem deveria ter sido transmitida via broadcast');
+    assert.strictEqual(broadcastReceived.type, MessageType.GOSSIP_MESSAGE);
+    assert.strictEqual(broadcastReceived.payload.message.id, 'msg-offline-outbox-test-1');
+
+    // Confirma que a fila agora está limpa para esse item
+    const remaining = storage.getPendingOutbox(10);
+    const stillFound = remaining.find(p => p.payload && p.payload.message && p.payload.message.id === 'msg-offline-outbox-test-1');
+    assert(!stillFound, 'Mensagem sincronizada deve ser removida da fila pendente');
+  });
+
+  test('Protocolo Wire P2P: CHUNK_REQUEST retorna CHUNK_RESPONSE com integridade de dados', () => {
+    const testEngine = new P2PEngine({
+      nodeId: 'node-chunk-responder',
+      p2pPort: 19873,
+      bootstrapNodes: [],
+      storage,
+      chain,
+      notificationService: notifService,
+      auditLogger
+    });
+
+    // Salva chunk no armazenamento
+    const sampleBuffer = Buffer.from('conteúdo binário fragmentado para teste P2P');
+    const chunkHash = CryptoEngine.sha256(sampleBuffer);
+    const fileHash = 'aabbcc11223344556677889900aabbcc11223344556677889900aabbcc112233';
+
+    storage.saveFileChunk({
+      fileHash,
+      chunkIndex: 0,
+      totalChunks: 1,
+      chunkHash,
+      chunkSize: sampleBuffer.length,
+      chunkData: sampleBuffer.toString('base64')
+    });
+
+    let sentResponse = null;
+    const mockRequesterSocket = {
+      readyState: 1,
+      send: (data) => {
+        sentResponse = JSON.parse(data);
+      }
+    };
+
+    const reqPacket = ProtocolPacket.create(MessageType.CHUNK_REQUEST, 'node-requester-client', {
+      fileHash,
+      chunkIndex: 0
+    });
+
+    testEngine.handleChunkRequest(mockRequesterSocket, reqPacket);
+
+    assert(sentResponse, 'Deveria ter respondido com CHUNK_RESPONSE');
+    assert.strictEqual(sentResponse.type, MessageType.CHUNK_RESPONSE);
+    assert.strictEqual(sentResponse.payload.fileHash, fileHash);
+    assert.strictEqual(sentResponse.payload.chunkIndex, 0);
+    assert.strictEqual(sentResponse.payload.chunkHash, chunkHash);
+    assert.strictEqual(Buffer.from(sentResponse.payload.chunkData, 'base64').toString('utf8'), 'conteúdo binário fragmentado para teste P2P');
+  });
+
+  test('handleChunkResponse valida integridade SHA256 e descarta partes corrompidas', () => {
+    const testEngine = new P2PEngine({
+      nodeId: 'node-chunk-receiver',
+      p2pPort: 19874,
+      bootstrapNodes: [],
+      storage,
+      chain,
+      notificationService: notifService,
+      auditLogger
+    });
+
+    const fileHash = 'bad00011223344556677889900aabbcc11223344556677889900aabbcc112233';
+    const fakeChunkData = Buffer.from('dados alterados em transito').toString('base64');
+    const fakeHash = 'hash_original_esperado_diferente_dos_dados';
+
+    const respPacket = ProtocolPacket.create(MessageType.CHUNK_RESPONSE, 'remote-peer', {
+      fileHash,
+      chunkIndex: 0,
+      totalChunks: 1,
+      chunkHash: fakeHash,
+      chunkData: fakeChunkData
+    });
+
+    testEngine.handleChunkResponse(null, respPacket);
+
+    // O chunk NÃO deve ter sido salvo devido à falha de integridade
+    const stored = storage.getFileChunk(fileHash, 0);
+    assert(!stored, 'Fragmento com hash corrompido não deve ser persistido');
+  });
+
+  test('handleChunkResponse respeita política de armazenamento "messages_only"', () => {
+    const testEngine = new P2PEngine({
+      nodeId: 'node-messages-only',
+      p2pPort: 19875,
+      bootstrapNodes: [],
+      storage,
+      chain,
+      notificationService: notifService,
+      auditLogger
+    });
+
+    storage.setStorageSetting('storage_policy', 'messages_only');
+
+    const validBuffer = Buffer.from('arquivo que nó leve não quer guardar');
+    const fileHash = 'light0011223344556677889900aabbcc11223344556677889900aabbcc112233';
+    const chunkHash = CryptoEngine.sha256(validBuffer);
+
+    const respPacket = ProtocolPacket.create(MessageType.CHUNK_RESPONSE, 'remote-peer', {
+      fileHash,
+      chunkIndex: 0,
+      totalChunks: 1,
+      chunkHash,
+      chunkData: validBuffer.toString('base64')
+    });
+
+    testEngine.handleChunkResponse(null, respPacket);
+
+    const stored = storage.getFileChunk(fileHash, 0);
+    assert(!stored, 'Nó com política messages_only não deve salvar chunks de arquivos');
+
+    // Restaura política para 'all'
+    storage.setStorageSetting('storage_policy', 'all');
+  });
+
+  // --- MÓDULO 15: CADASTRO SIMPLES E PSEUDÔNIMO, UNICIDADE E PAREAMENTO DE DISPOSITIVOS ---
+  console.log('\n\x1b[1m[15] Testes de Cadastro Simples, Pseudônimo, Unicidade e Pareamento\x1b[0m');
+
+  test('Validação de pseudônimo: regras de caracteres, tamanho e proibição de nomes reservados', () => {
+    // Nomes muito curtos (< 3) ou muito longos (> 25)
+    assert.strictEqual(storage.validateUsername('').valid, false);
+    assert.strictEqual(storage.validateUsername('ab').valid, false);
+    assert.strictEqual(storage.validateUsername('a'.repeat(26)).valid, false);
+
+    // Caracteres inválidos e espaços
+    assert.strictEqual(storage.validateUsername('nome com espaco').valid, false);
+    assert.strictEqual(storage.validateUsername('usuario@hack!').valid, false);
+    assert.strictEqual(storage.validateUsername('user<script>').valid, false);
+
+    // Nomes reservados do sistema
+    assert.strictEqual(storage.validateUsername('admin').valid, false);
+    assert.strictEqual(storage.validateUsername('ADMINISTRADOR').valid, false);
+    assert.strictEqual(storage.validateUsername('sistema').valid, false);
+    assert.strictEqual(storage.validateUsername('root').valid, false);
+    assert.strictEqual(storage.validateUsername('suporte').valid, false);
+
+    // Nomes válidos com acentuação, hífen e sublinhado
+    const valid1 = storage.validateUsername('viajante_livre');
+    assert.strictEqual(valid1.valid, true);
+    assert.strictEqual(valid1.cleanUsername, 'viajante_livre');
+
+    const valid2 = storage.validateUsername('josé-silva');
+    assert.strictEqual(valid2.valid, true);
+    assert.strictEqual(valid2.cleanUsername, 'josé-silva');
+  });
+
+  test('Unicidade case-insensitive e geração de sugestões inteligentes quando nome já existe', () => {
+    const baseName = 'explorador_p2p';
+    storage.createPseudonymUser({
+      id: 'usr_test_pseudo_1',
+      username: baseName,
+      publicKey: 'FAKE_PUBKEY_1',
+      encryptedPrivateKey: 'FAKE_ENC_KEY_1',
+      role: 'Membro',
+      status: 'active'
+    });
+
+    // Case-insensitive check
+    assert.strictEqual(storage.isUsernameAvailable('explorador_p2p'), false);
+    assert.strictEqual(storage.isUsernameAvailable('EXPLORADOR_P2P'), false);
+    assert.strictEqual(storage.isUsernameAvailable('Explorador_P2P'), false);
+
+    const found = storage.getUserByUsername('EXPLORADOR_P2P');
+    assert(found);
+    assert.strictEqual(found.id, 'usr_test_pseudo_1');
+
+    // Geração de sugestões
+    const suggestions = storage.generateUsernameSuggestions(baseName);
+    assert(Array.isArray(suggestions));
+    assert(suggestions.length >= 3);
+    suggestions.forEach(sug => {
+      assert(storage.isUsernameAvailable(sug), `Sugestão ${sug} deveria estar disponível`);
+      assert(sug.toLowerCase().includes('explorador'));
+    });
+  });
+
+  test('Cadastro simples pseudônimo: sem dados pessoais, chave privada protegida e ID aleatório', () => {
+    const userId = 'usr_rand_' + crypto.randomBytes(6).toString('hex');
+    const keypair = CryptoEngine.generateEd25519KeyPair();
+    const vaultKey = crypto.randomBytes(32).toString('hex');
+    const encKey = CryptoEngine.encryptPrivateKey(keypair.privateKey, vaultKey);
+    const recoveryCode = 'REC-A1B2-C3D4-E5F6';
+    const recoveryHash = CryptoEngine.hashPassword(recoveryCode);
+
+    const user = storage.createPseudonymUser({
+      id: userId,
+      username: 'leitor_anonimo_42',
+      publicKey: keypair.publicKey,
+      encryptedPrivateKey: JSON.stringify(encKey),
+      recoveryCodeHash: recoveryHash,
+      deviceId: 'dev_mobile_01',
+      role: 'Membro',
+      status: 'active'
+    });
+
+    assert(user);
+    assert.strictEqual(user.id, userId);
+    assert.strictEqual(user.username, 'leitor_anonimo_42');
+    assert.strictEqual(user.is_pseudonym, 1);
+
+    // Chave privada NUNCA pode ser persistida em texto puro
+    assert(!user.privateKey);
+    assert(!user.private_key);
+    assert(user.encrypted_private_key);
+    assert(user.encrypted_private_key.includes('ciphertext'));
+
+    // Verificação de que chave pode ser decifrada com a vaultKey do dispositivo
+    const parsedEnc = JSON.parse(user.encrypted_private_key);
+    const decryptedKey = CryptoEngine.decryptPrivateKey(parsedEnc, vaultKey);
+    assert.strictEqual(decryptedKey, keypair.privateKey);
+
+    // Validação de hash do código de recuperação
+    assert(CryptoEngine.verifyPassword(recoveryCode, user.recovery_code_hash));
+  });
+
+  test('Alteração de pseudônimo público preserva o identificador interno e a chave pública', () => {
+    const origUser = storage.getUserByUsername('leitor_anonimo_42');
+    assert(origUser);
+
+    const updateRes = storage.updatePseudonymUsername(origUser.id, 'viajante_das_redes');
+    assert.strictEqual(updateRes.success, true);
+    assert.strictEqual(updateRes.username, 'viajante_das_redes');
+
+    const updatedUser = storage.getUserByUsername('viajante_das_redes');
+    assert(updatedUser);
+    assert.strictEqual(updatedUser.id, origUser.id, 'ID interno aleatório deve permanecer inalterado');
+    assert.strictEqual(updatedUser.public_key, origUser.public_key, 'Chave pública deve permanecer inalterada');
+  });
+
+  test('Pareamento e vinculação de múltiplos dispositivos com código seguro e revogação', () => {
+    const pairingCode = 'PAIR-8821-9932';
+    const pairing = storage.createDevicePairing({
+      pairingCode,
+      userId: 'usr_test_pseudo_1',
+      username: 'explorador_p2p',
+      encryptedVaultKey: 'VAULT_PAYLOAD_CIPHER',
+      publicKey: 'FAKE_PUBKEY_1',
+      expiresInMs: 10 * 60 * 1000
+    });
+
+    assert.strictEqual(pairing.pairingCode, pairingCode);
+
+    const fetched = storage.getDevicePairing(pairingCode);
+    assert(fetched);
+    assert.strictEqual(fetched.username, 'explorador_p2p');
+    assert.strictEqual(fetched.status, 'pending');
+
+    const completed = storage.completeDevicePairing(pairingCode);
+    assert(completed);
+    assert.strictEqual(completed.status, 'paired');
+
+    // Registrar e revogar sessão do novo dispositivo
+    storage.registerDeviceSession({
+      sessionId: 'sess_paired_phone',
+      userId: 'usr_test_pseudo_1',
+      deviceType: 'mobile',
+      clientType: 'paired_client',
+      isRelay: false
+    });
+
+    const userDevices = storage.getUserDeviceSessions('usr_test_pseudo_1');
+    assert(userDevices.some(d => d.session_id === 'sess_paired_phone'));
+
+    const revoked = storage.revokeDeviceSession('usr_test_pseudo_1', 'sess_paired_phone');
+    assert.strictEqual(revoked, true);
+
+    const afterRevoke = storage.getUserDeviceSessions('usr_test_pseudo_1');
+    assert(!afterRevoke.some(d => d.session_id === 'sess_paired_phone'));
+  });
+
+  test('Proteção contra cadastros automáticos abusivos (Rate Limiting de Criação)', () => {
+    const testIp = '198.51.100.77';
+
+    // Até 5 tentativas permitidas
+    for (let i = 1; i <= 5; i++) {
+      const check = storage.checkRegistrationRateLimit(testIp, 5, 60000);
+      assert.strictEqual(check.allowed, true);
+    }
+
+    // 6ª tentativa bloqueada por limite de taxa
+    const blocked = storage.checkRegistrationRateLimit(testIp, 5, 60000);
+    assert.strictEqual(blocked.allowed, false);
+    assert(blocked.error.includes('Limite de novos cadastros atingido'));
+  });
+
+  test('Contrato de privacidade: Ausência estrita de coleta de CPF, e-mail, telefone ou nome real', () => {
+    const allUsers = storage.getAllUsers();
+    allUsers.forEach(u => {
+      assert.strictEqual(u.cpf, undefined, 'CPF não deve existir no modelo');
+      assert.strictEqual(u.email, undefined, 'E-mail não deve existir no modelo');
+      assert.strictEqual(u.phone, undefined, 'Telefone não deve existir no modelo');
+      assert.strictEqual(u.real_name, undefined, 'Nome real não deve existir no modelo');
+      assert.strictEqual(u.address, undefined, 'Endereço não deve existir no modelo');
+      assert(u.username, 'Deve possuir apenas pseudônimo público');
+      assert(u.public_key, 'Deve possuir chave pública criptográfica');
+    });
+  });
+
+  test('Restauração de acesso seguro utilizando código de recuperação (REC-XXXX-XXXX-XXXX)', () => {
+    const testCode = 'REC-9988-7766-5544';
+    const codeHash = CryptoEngine.hashPassword(testCode);
+
+    storage.createPseudonymUser({
+      id: 'usr_recover_target',
+      username: 'usuario_recuperavel',
+      publicKey: 'FAKE_RECOVER_PUBKEY',
+      encryptedPrivateKey: 'FAKE_ENC_KEY',
+      recoveryCodeHash: codeHash,
+      role: 'Membro',
+      status: 'active'
+    });
+
+    const user = storage.getUserByUsername('usuario_recuperavel');
+    assert(user);
+    assert(user.recovery_code_hash);
+
+    // Validação correta com código legítimo
+    const isValid = CryptoEngine.verifyPassword(testCode, user.recovery_code_hash);
+    assert.strictEqual(isValid, true);
+
+    // Rejeição com código adulterado
+    const isBadValid = CryptoEngine.verifyPassword('REC-0000-0000-0000', user.recovery_code_hash);
+    assert.strictEqual(isBadValid, false);
+  });
+
+  test('Geração de QR Code vetorial SVG para pareamento com validade de 10 minutos', () => {
+    const pairingCode = 'PAIR-9182-3746';
+    const QRCodeGenerator = require('../src/common/qrcode');
+    const pairUrl = `https://cp2p.democracias.org/pair/${pairingCode}`;
+
+    const svg = QRCodeGenerator.generateSVG(pairUrl, 240);
+    assert(typeof svg === 'string');
+    assert(svg.includes('<svg'));
+    assert(svg.includes('</svg>'));
+    assert(svg.includes('viewBox="0 0 '));
+
+    const pairing = storage.createDevicePairing({
+      pairingCode,
+      userId: 'usr_test_pseudo_1',
+      username: 'explorador_p2p',
+      encryptedVaultKey: 'VAULT_KEY_ENC',
+      publicKey: 'FAKE_PUBKEY_1',
+      expiresInMs: 10 * 60 * 1000
+    });
+
+    assert(pairing.expiresAt > Date.now());
+    assert(pairing.expiresAt <= Date.now() + (10 * 60 * 1000) + 1000);
   });
 
   // --- RELATÓRIO FINAL ---
