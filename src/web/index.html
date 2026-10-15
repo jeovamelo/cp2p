@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Comunidade Resiliente - Plataforma de mensagens P2P descentralizada e imune a quedas de servidor central">
+  <meta name="theme-color" content="#10b981">
+  <title>Comunidade Resiliente - Rede P2P Autônoma</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+
+  <!-- TOP HEADER -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="logo-shield">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title">Comunidade Resiliente</h1>
+        <div class="brand-tagline">Rede P2P Descentralizada • E2EE</div>
+      </div>
+    </div>
+
+    <!-- Indicadores de Status P2P em Tempo Real -->
+    <div class="header-status-group">
+      <!-- Status da VPS de Bootstrap -->
+      <div class="status-chip" id="vps-status-chip" title="Status da VPS de Descoberta Inicial">
+        <span class="pulse-dot online" id="vps-pulse-dot"></span>
+        <span id="vps-status-label">VPS: Online</span>
+      </div>
+
+      <!-- Status da Malha P2P Pessoal -->
+      <div class="status-chip" id="mesh-status-chip" title="Malha P2P entre computadores pessoais">
+        <span class="pulse-dot online" id="mesh-pulse-dot"></span>
+        <span id="mesh-status-label">Malha P2P: 0 nós</span>
+      </div>
+
+      <!-- Líder Atual Eleito -->
+      <div class="status-chip" id="leader-status-chip" title="Nó Líder/Coordenador atual da malha">
+        <span style="font-size: 0.9rem;">👑</span>
+        <span id="leader-status-label">Líder: --</span>
+      </div>
+    </div>
+
+    <!-- Botões de Ação do Header -->
+    <div class="header-actions">
+      <button class="btn-header" id="btn-open-peers" title="Ver nós conectados na rede">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+        Nós P2P
+      </button>
+
+      <button class="btn-header" id="btn-open-admin" title="Painel de controle e membros">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        Admin
+      </button>
+
+      <button class="btn-header" id="btn-open-audit" title="Ver logs criptográficos imutáveis">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+        Auditoria
+      </button>
+
+      <button class="btn-header" id="btn-open-backup" title="Exportar histórico seguro">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+        Backup
+      </button>
+
+      <button class="btn-header primary" id="btn-auth-action">
+        Entrar / Trocar
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN APP CONTAINER -->
+  <main class="main-layout">
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar">
+      <!-- Card do Usuário Ativo -->
+      <div class="user-profile-card">
+        <div class="user-header-row">
+          <div class="user-avatar" id="sidebar-user-avatar">?</div>
+          <div class="user-info">
+            <span class="user-name" id="sidebar-user-name">Carregando...</span>
+            <span class="role-badge member" id="sidebar-user-role">Membro</span>
+          </div>
+        </div>
+
+        <div class="key-snippet-box">
+          <span id="sidebar-pubkey-snippet">Chave: 0x...</span>
+          <button id="btn-copy-pubkey" title="Copiar chave pública">Copiar</button>
+        </div>
+      </div>
+
+      <!-- Lista de Canais -->
+      <div>
+        <div class="sidebar-section-title">Comunidade & Canais</div>
+        <div class="channel-item active" id="channel-general">
+          <div class="channel-left">
+            <span class="channel-hash">#</span>
+            <span class="channel-name" id="sidebar-community-name">Geral</span>
+          </div>
+          <span class="sequence-badge" id="sidebar-msg-count">0 msgs</span>
+        </div>
+      </div>
+
+      <!-- Telemetria P2P Rápida -->
+      <div class="stats-card">
+        <div class="sidebar-section-title" style="margin-bottom: 2px;">Telemetria do Nó</div>
+        <div class="stat-row">
+          <span class="stat-label">ID do Nó:</span>
+          <span class="stat-value" id="telemetry-node-id">--</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Porta P2P:</span>
+          <span class="stat-value" id="telemetry-p2p-port">--</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Época de Chave:</span>
+          <span class="stat-value" id="telemetry-epoch">Época #1</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Termo de Consenso:</span>
+          <span class="stat-value" id="telemetry-term">Termo 1</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER FEED -->
+    <section class="feed-container">
+      <!-- Channel Header -->
+      <div class="channel-header">
+        <div class="channel-desc">
+          <h2>
+            <span># geral</span>
+            <span class="role-badge admin" style="font-size: 0.7rem;">Canal Oficial</span>
+          </h2>
+          <p id="channel-description-text">Canal seguro de avisos e comunicados oficiais. Apenas administradores autorizados publicam.</p>
+        </div>
+
+        <div class="security-badge-pill">
+          <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+          E2EE (AES-256-GCM) + Assinaturas Ed25519
+        </div>
+      </div>
+
+      <!-- Banner Informativo quando VPS cai -->
+      <div class="alert-banner vps-down" id="vps-offline-banner" style="display: none;">
+        <span style="font-size: 1.2rem;">⚠️</span>
+        <div>
+          <strong>A VPS central está offline ou bloqueada!</strong>
+          <p style="font-size: 0.8rem; margin-top: 2px;">A rede P2P ativou a malha descentralizada autônoma. Os computadores dos membros continuam sincronizando diretamente sem interrupção.</p>
+        </div>
+      </div>
+
+      <!-- Lista de Mensagens -->
+      <div class="messages-list" id="messages-stream">
+        <div class="empty-state" id="empty-state-view">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+          </svg>
+          <h3>Nenhum comunicado publicado ainda</h3>
+          <p style="font-size: 0.85rem; margin-top: 6px;">Quando os administradores enviarem mensagens assinadas, elas aparecerão aqui replicadas entre todos os nós.</p>
+        </div>
+      </div>
+
+      <!-- BARRA INFERIOR DE PUBLICAÇÃO -->
+      <div class="composer-area">
+        <!-- Visualização para Administrador: Composer Ativo -->
+        <div class="composer-box" id="admin-composer" style="display: none;">
+          <!-- Preview de Imagem Anexada -->
+          <div class="attachment-preview-box" id="composer-attachment-preview">
+            <img id="attachment-preview-img" src="" alt="Anexo">
+            <button class="btn-remove-attachment" id="btn-remove-attachment" title="Remover anexo">✕</button>
+          </div>
+
+          <textarea 
+            class="composer-textarea" 
+            id="composer-input" 
+            placeholder="Escreva um comunicado oficial para toda a comunidade..."
+            rows="2"
+          ></textarea>
+
+          <div class="composer-controls">
+            <div class="composer-attach-tools">
+              <input type="file" id="file-attachment-input" accept="image/*" style="display: none;">
+              <button class="btn-tool" id="btn-attach-image" type="button">
+                <svg width="15" height="15" fill="currentColor" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+                Anexar Imagem
+              </button>
+              <span id="composer-char-count" style="font-size: 0.75rem; color: var(--text-dim);">Assinatura Ed25519 ativa</span>
+            </div>
+
+            <button class="btn-publish" id="btn-send-announcement">
+              <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+              Publicar Comunicado Assinado
+            </button>
+          </div>
+        </div>
+
+        <!-- Visualização para Membro / Moderador: Canal Unidirecional Protegido -->
+        <div class="readonly-lock-bar" id="member-readonly-bar">
+          <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+          <span>Canal Oficial Unidirecional: Apenas administradores com chave privada autorizada podem publicar.</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODAL: NÓS P2P & TOPOLOGIA -->
+  <div class="modal-overlay" id="modal-peers">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Nós P2P da Rede & Descoberta</h3>
+        <button class="modal-close-btn" data-close="modal-peers">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.88rem; color: var(--text-muted);">
+          Lista descentralizada de computadores pessoais conectados na malha P2P. A comunicação ocorre diretamente entre os nós.
+        </p>
+
+        <div class="peers-grid" id="modal-peers-list">
+          <!-- Gerado dinamicamente -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: PAINEL ADMINISTRATIVO & GESTÃO DE MEMBROS -->
+  <div class="modal-overlay" id="modal-admin">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Painel de Administração e Membros</h3>
+        <button class="modal-close-btn" data-close="modal-admin">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2); padding: 12px; border-radius: 8px;">
+          <h4 style="color: var(--accent-emerald); font-size: 0.9rem;">Política de Segurança & Rotação de Chaves</h4>
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">
+            Ao revogar um usuário, o sistema executa automaticamente a <strong>Rotação de Chaves da Comunidade (Key Rotation)</strong>. Uma nova época criptográfica é gerada, impedindo que o membro revogado leia comunicados futuros.
+          </p>
+        </div>
+
+        <div class="sidebar-section-title">Usuários Cadastrados</div>
+        <div id="admin-users-list" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Gerado dinamicamente -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: AUDITORIA IMUTÁVEL -->
+  <div class="modal-overlay" id="modal-audit">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Cadeia de Auditoria Criptográfica</h3>
+        <button class="modal-close-btn" data-close="modal-audit">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="audit-integrity-status" style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.9rem; color: var(--accent-emerald);">
+          ✓ Cadeia de Auditoria Verificada e 100% Íntegra
+        </div>
+
+        <div id="audit-logs-list" style="display: flex; flex-direction: column; gap: 10px; font-family: var(--font-mono); font-size: 0.75rem;">
+          <!-- Gerado dinamicamente -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: BACKUP & RESTAURAÇÃO -->
+  <div class="modal-overlay" id="modal-backup">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Exportar e Restaurar Histórico</h3>
+        <button class="modal-close-btn" data-close="modal-backup">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.88rem; color: var(--text-muted);">
+          Você pode salvar uma cópia de segurança criptografada do histórico local de mensagens, nós e logs de auditoria.
+        </p>
+
+        <a href="/api/export" download class="btn-publish" style="text-decoration: none; justify-content: center;" id="btn-download-backup">
+          Baixar Arquivo de Backup Criptografado (.JSON)
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: LOGIN / CADASTRO -->
+  <div class="modal-overlay" id="modal-auth">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="auth-modal-title">Autenticação do Usuário</h3>
+        <button class="modal-close-btn" data-close="modal-auth">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="auth-username">Nome de Usuário</label>
+          <input type="text" id="auth-username" class="form-control" placeholder="ex: alice_admin ou bob_membro">
+        </div>
+
+        <div class="form-group">
+          <label for="auth-password">Senha Secreta</label>
+          <input type="password" id="auth-password" class="form-control" placeholder="••••••••">
+        </div>
+
+        <div class="form-group" id="auth-role-group">
+          <label for="auth-role">Papel na Comunidade</label>
+          <select id="auth-role" class="form-control">
+            <option value="Membro">Membro (Leitura e Retransmissão P2P)</option>
+            <option value="Moderador">Moderador (Gestão de Membros)</option>
+            <option value="Administrador">Administrador (Publicação e Governança)</option>
+          </select>
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+          <button class="btn-publish" id="btn-submit-login" style="flex: 1; justify-content: center;">
+            Entrar
+          </button>
+          <button class="btn-header" id="btn-submit-register" style="flex: 1; justify-content: center;">
+            Criar Nova Conta
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

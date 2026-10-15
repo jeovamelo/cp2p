@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # VPS Bootstrap / Relay (Ponto inicial de descoberta)
+  vps-bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile.vps
+    container_name: vps-bootstrap
+    ports:
+      - "4001:4001"
+    environment:
+      - PORT=4001
+    networks:
+      - p2p-mesh
+
+  # Nó 1: Administrador Alice
+  node-alice-admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: node-alice-admin
+    depends_on:
+      - vps-bootstrap
+    ports:
+      - "5001:5001"
+      - "6001:6001"
+    environment:
+      - NODE_ID=node-alice-admin
+      - USERNAME=alice_admin
+      - ROLE=Administrador
+      - HTTP_PORT=5001
+      - P2P_PORT=6001
+      - BOOTSTRAPS=ws://vps-bootstrap:4001
+    volumes:
+      - alice-data:/app/data
+    networks:
+      - p2p-mesh
+
+  # Nó 2: Moderador Bob
+  node-bob-moderador:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: node-bob-moderador
+    depends_on:
+      - vps-bootstrap
+    ports:
+      - "5002:5002"
+      - "6002:6002"
+    environment:
+      - NODE_ID=node-bob-moderador
+      - USERNAME=bob_moderador
+      - ROLE=Moderador
+      - HTTP_PORT=5002
+      - P2P_PORT=6002
+      - BOOTSTRAPS=ws://vps-bootstrap:4001
+    volumes:
+      - bob-data:/app/data
+    networks:
+      - p2p-mesh
+
+  # Nó 3: Membro Carlos
+  node-carlos-membro:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: node-carlos-membro
+    depends_on:
+      - vps-bootstrap
+    ports:
+      - "5003:5003"
+      - "6003:6003"
+    environment:
+      - NODE_ID=node-carlos-membro
+      - USERNAME=carlos_membro
+      - ROLE=Membro
+      - HTTP_PORT=5003
+      - P2P_PORT=6003
+      - BOOTSTRAPS=ws://vps-bootstrap:4001
+    volumes:
+      - carlos-data:/app/data
+    networks:
+      - p2p-mesh
+
+volumes:
+  alice-data:
+  bob-data:
+  carlos-data:
+
+networks:
+  p2p-mesh:
+    driver: bridge
