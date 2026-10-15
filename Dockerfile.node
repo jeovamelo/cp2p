@@ -1,0 +1,19 @@
+FROM node:24-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install --omit=dev
+
+COPY src/ ./src/
+
+ENV HTTP_PORT=5001
+ENV P2P_PORT=6001
+ENV ROLE=Membro
+ENV DATA_DIR=/app/data
+
+EXPOSE 5001 6001
+
+VOLUME ["/app/data"]
+
+CMD ["node", "src/node/p2p_node.js"]

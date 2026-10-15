@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Comunidade Resiliente - Aplicativo Desktop de Mensagens P2P no estilo WhatsApp Comunidades">
+  <meta name="theme-color" content="#111b21">
+  <title>Comunidade Resiliente - WhatsApp Desktop P2P</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body class="whatsapp-theme">
+
+  <!-- APLICAÇÃO PRINCIPAL: 3 COLUNAS ESTILO WHATSAPP DESKTOP -->
+  <div class="whatsapp-layout">
+
+    <!-- COLUNA 1: DOCK LATERAL DE COMUNIDADES (68px) -->
+    <nav class="wa-nav-rail" aria-label="Comunidades">
+      <div class="wa-rail-top">
+        <!-- Ícone Principal WhatsApp / Comunidades -->
+        <div class="wa-brand-icon" title="Comunidade Resiliente P2P">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12c0 1.82.49 3.53 1.34 5L2 22l5.17-1.32C8.6 21.52 10.26 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.57 0-3.04-.44-4.3-1.2l-.31-.18-3.07.78.82-2.99-.2-.32C4.31 14.88 3.8 13.48 3.8 12c0-4.52 3.68-8.2 8.2-8.2 4.52 0 8.2 3.68 8.2 8.2 0 4.52-3.68 8.2-8.2 8.2zm4.56-6.14c-.25-.13-1.47-.72-1.7-.8-.23-.09-.39-.13-.56.13-.17.25-.64.8-.79.97-.14.17-.29.19-.54.06-.25-.13-1.06-.39-2.02-1.25-.75-.67-1.26-1.5-1.4-1.75-.15-.25-.02-.39.11-.51.11-.11.25-.29.38-.44.13-.14.17-.25.25-.41.08-.17.04-.31-.02-.44-.06-.13-.56-1.34-.76-1.84-.2-.48-.4-.42-.56-.43h-.47c-.17 0-.44.06-.67.31-.23.25-.89.87-.89 2.12s.91 2.46 1.04 2.63c.13.17 1.79 2.73 4.34 3.83.61.26 1.08.42 1.45.54.61.19 1.17.17 1.61.1.49-.07 1.47-.6 1.68-1.18.21-.58.21-1.08.15-1.18-.06-.11-.23-.17-.48-.29z"/>
+          </svg>
+        </div>
+
+        <div class="wa-rail-divider"></div>
+
+        <!-- Lista Dinâmica de Comunidades -->
+        <div class="wa-communities-stack" id="wa-communities-container">
+          <!-- Renderizado via JS -->
+        </div>
+
+        <!-- Botões de Adicionar e Entrar em Comunidade -->
+        <div class="wa-rail-actions">
+          <button class="wa-rail-btn" id="btn-open-create-comm" title="Criar Nova Comunidade">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+            </svg>
+          </button>
+
+          <button class="wa-rail-btn" id="btn-open-join-comm" title="Entrar em Comunidade via Convite">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Rodapé da barra de comunidades: Status da Malha e Perfil -->
+      <div class="wa-rail-bottom">
+        <button class="wa-rail-btn status-btn" id="btn-quick-status" title="Status da Malha P2P">
+          <span class="pulse-dot online" id="rail-mesh-dot"></span>
+        </button>
+
+        <button class="wa-rail-avatar-btn" id="btn-user-profile-quick" title="Meu Perfil / Chave">
+          <div class="wa-rail-avatar" id="rail-user-avatar">?</div>
+        </button>
+      </div>
+    </nav>
+
+    <!-- COLUNA 2: BARRA LATERAL DE CANAIS & CHATS (360px) -->
+    <aside class="wa-sidebar">
+      <!-- Topo da Barra: Título da Comunidade Ativa e Botões -->
+      <div class="wa-sidebar-header">
+        <div class="wa-comm-info-box">
+          <h2 class="wa-comm-title" id="wa-active-comm-name">Comunidade Resiliente</h2>
+          <span class="wa-comm-badge" id="wa-active-comm-role">Oficial</span>
+        </div>
+
+        <div class="wa-header-icons">
+          <button class="wa-icon-btn" id="btn-invite-active-comm" title="Convidar Pessoas (Copiar Código)">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+            </svg>
+          </button>
+
+          <button class="wa-icon-btn" id="btn-comm-menu" title="Opções da Comunidade">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Barra de Pesquisa WhatsApp -->
+      <div class="wa-search-bar">
+        <div class="wa-search-box">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" class="wa-search-icon">
+            <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+          </svg>
+          <input type="text" id="wa-search-input" placeholder="Pesquisar conversas ou avisos..." autocomplete="off">
+        </div>
+      </div>
+
+      <!-- Abas de Filtro WhatsApp -->
+      <div class="wa-filter-tabs">
+        <button class="wa-filter-chip active" data-filter="all">Tudo</button>
+        <button class="wa-filter-chip" data-filter="announcements">📢 Avisos Oficiais</button>
+        <button class="wa-filter-chip" data-filter="peers">🌐 Nós P2P</button>
+      </div>
+
+      <!-- Lista de Canais da Comunidade -->
+      <div class="wa-channels-list" id="wa-channels-list">
+        <!-- Canal 1: Avisos Oficiais (Unidirecional / Admins) -->
+        <div class="wa-channel-item active" id="channel-announcements" data-channel="announcements">
+          <div class="wa-channel-avatar megaphone">
+            📢
+          </div>
+          <div class="wa-channel-content">
+            <div class="wa-channel-header-row">
+              <span class="wa-channel-title">Avisos Oficiais</span>
+              <span class="wa-channel-time" id="wa-channel-last-time">--:--</span>
+            </div>
+            <div class="wa-channel-desc-row">
+              <span class="wa-channel-snippet" id="wa-channel-snippet">
+                <span class="wa-double-checks">✓✓</span>
+                <span id="wa-snippet-text">Canal seguro de comunicados oficiais assinados</span>
+              </span>
+              <span class="wa-badge-pill" id="wa-msg-count-badge">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Canal 2: Discussão Geral (Visualização) -->
+        <div class="wa-channel-item" id="channel-discussion" data-channel="discussion">
+          <div class="wa-channel-avatar general">
+            💬
+          </div>
+          <div class="wa-channel-content">
+            <div class="wa-channel-header-row">
+              <span class="wa-channel-title">Discussão da Comunidade</span>
+              <span class="wa-channel-time">P2P</span>
+            </div>
+            <div class="wa-channel-desc-row">
+              <span class="wa-channel-snippet">Espaço de interação e suporte entre membros</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Canal 3: Telemetria da Malha & Auditoria -->
+        <div class="wa-channel-item" id="channel-network" data-channel="network">
+          <div class="wa-channel-avatar network">
+            🛡️
+          </div>
+          <div class="wa-channel-content">
+            <div class="wa-channel-header-row">
+              <span class="wa-channel-title">Rede P2P & Auditoria</span>
+              <span class="wa-channel-time" id="wa-mesh-count-label">0 nós</span>
+            </div>
+            <div class="wa-channel-desc-row">
+              <span class="wa-channel-snippet">Topologia distribuída imune a quedas de servidor</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rodapé da Sidebar: Info do Usuário Conectado -->
+      <div class="wa-sidebar-footer">
+        <div class="wa-footer-user">
+          <div class="wa-footer-avatar" id="sidebar-user-avatar">?</div>
+          <div class="wa-footer-info">
+            <span class="wa-footer-name" id="sidebar-user-name">Carregando...</span>
+            <span class="wa-footer-role" id="sidebar-user-role">Membro</span>
+          </div>
+        </div>
+        <button class="wa-footer-copy-btn" id="btn-copy-pubkey" title="Copiar minha chave pública Ed25519">
+          Copiar Chave
+        </button>
+      </div>
+    </aside>
+
+    <!-- COLUNA 3: ÁREA DE CHAT WHATSAPP -->
+    <main class="wa-chat-pane">
+      <!-- Topo do Chat -->
+      <header class="wa-chat-header">
+        <div class="wa-chat-info">
+          <div class="wa-chat-avatar-small" id="chat-header-avatar">📢</div>
+          <div>
+            <h1 class="wa-chat-title" id="chat-header-title">Avisos Oficiais</h1>
+            <p class="wa-chat-subtitle" id="chat-header-subtitle">somente administradores podem publicar • E2EE P2P</p>
+          </div>
+        </div>
+
+        <div class="wa-chat-actions">
+          <button class="wa-action-pill highlight" id="btn-open-network-dashboard" title="Visão da Comunidade & Status da Rede P2P">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+            <span id="wa-network-btn-label">Visão da Comunidade (0)</span>
+          </button>
+
+          <button class="wa-action-pill" id="btn-open-peers" title="Ver nós conectados na malha">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+            <span id="wa-peers-btn-label">Nós P2P (0)</span>
+          </button>
+
+          <button class="wa-action-pill" id="btn-open-audit" title="Ver cadeia de auditoria imutável">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+            Auditoria
+          </button>
+
+          <button class="wa-action-pill" id="btn-open-backup" title="Exportar histórico criptografado">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+            Backup
+          </button>
+
+          <button class="wa-action-pill" id="btn-open-admin" title="Painel administrativo e membros">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            Admin
+          </button>
+
+          <button class="wa-action-pill primary" id="btn-auth-action">
+            Entrar / Trocar
+          </button>
+        </div>
+      </header>
+
+      <!-- Corpo das Mensagens com Doodle Wallpaper WhatsApp -->
+      <div class="wa-chat-body" id="wa-chat-scroll">
+        <!-- Aviso de Criptografia de Ponta a Ponta estilo WhatsApp -->
+        <div class="wa-system-pill">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+          </svg>
+          <span>As mensagens deste canal oficial são protegidas por criptografia de ponta a ponta (AES-256-GCM) e assinaturas Ed25519. Somente administradores autorizados podem publicar.</span>
+        </div>
+
+        <!-- Banner de Queda de VPS (Resiliência Ativa) -->
+        <div class="wa-alert-pill vps-down" id="vps-offline-banner" style="display: none;">
+          <span class="alert-icon">⚡</span>
+          <div>
+            <strong>VPS Central Offline! Malha P2P Autônoma Ativa.</strong>
+            <p>Os nós pessoais continuam sincronizando comunicados diretamente entre si sem interrupção.</p>
+          </div>
+        </div>
+
+        <!-- Separador de Data -->
+        <div class="wa-date-separator">
+          <span>HOJE</span>
+        </div>
+
+        <!-- Feed de Mensagens -->
+        <div class="wa-messages-container" id="messages-stream">
+          <!-- Empty State Inicial -->
+          <div class="wa-empty-state" id="empty-state-view">
+            <div class="wa-empty-icon">📢</div>
+            <h3>Nenhum comunicado publicado ainda</h3>
+            <p>Quando os administradores enviarem mensagens oficiais assinadas, elas serão transmitidas e validadas criptograficamente em tempo real.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Barra Inferior de Publicação / Bloqueio WhatsApp -->
+      <footer class="wa-composer-area">
+        <!-- Visualização para Administrador: Composer Ativo estilo WhatsApp -->
+        <div class="wa-admin-composer" id="admin-composer" style="display: none;">
+          <!-- Preview de Imagem Anexada -->
+          <div class="wa-attachment-preview" id="composer-attachment-preview">
+            <img id="attachment-preview-img" src="" alt="Anexo">
+            <button class="wa-btn-remove-attachment" id="btn-remove-attachment" title="Remover imagem">✕</button>
+          </div>
+
+          <div class="wa-composer-row">
+            <!-- Botão de Anexo estilo Clipe WhatsApp -->
+            <input type="file" id="file-attachment-input" accept="image/*" style="display: none;">
+            <button class="wa-composer-tool-btn" id="btn-attach-image" type="button" title="Anexar imagem">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/>
+              </svg>
+            </button>
+
+            <!-- Campo de Texto em Pílula -->
+            <div class="wa-input-pill">
+              <textarea 
+                id="composer-input" 
+                class="wa-composer-textarea" 
+                placeholder="Escreva um comunicado oficial para toda a comunidade..." 
+                rows="1"
+              ></textarea>
+            </div>
+
+            <!-- Botão Redondo de Enviar WhatsApp -->
+            <button class="wa-send-btn" id="btn-send-announcement" title="Publicar comunicado assinado com Ed25519">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Visualização para Membro / Moderador: Barra Bloqueada estilo WhatsApp Comunidades -->
+        <div class="wa-locked-notice-bar" id="member-readonly-bar">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+          </svg>
+          <span>Somente os administradores podem enviar mensagens para este canal de avisos.</span>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- MODAIS DO SISTEMA -->
+
+  <!-- MODAL 1: CRIAR NOVA COMUNIDADE -->
+  <div class="modal-overlay" id="modal-create-comm">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Criar Nova Comunidade</h3>
+        <button class="modal-close-btn" data-close="modal-create-comm">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 14px;">
+          Crie uma nova comunidade autônoma e descentralizada. Você será o <strong>Administrador Gênesis</strong> e terá a chave mestre para assinar comunicados oficiais.
+        </p>
+
+        <div class="form-group">
+          <label for="new-comm-name">Nome da Comunidade</label>
+          <input type="text" id="new-comm-name" class="form-control" placeholder="ex: Movimento Popular Centro-Sul">
+        </div>
+
+        <div class="form-group">
+          <label for="new-comm-desc">Descrição / Propósito</label>
+          <textarea id="new-comm-desc" class="form-control" rows="2" placeholder="Canal de comunicação seguro e resistente a censura..."></textarea>
+        </div>
+
+        <button class="btn-publish" id="btn-submit-create-comm" style="width: 100%; justify-content: center; margin-top: 10px;">
+          Criar Comunidade & Gerar Chaves E2EE
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: ENTRAR EM COMUNIDADE VIA CONVITE -->
+  <div class="modal-overlay" id="modal-join-comm">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Entrar em Comunidade via Convite</h3>
+        <button class="modal-close-btn" data-close="modal-join-comm">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 14px;">
+          Cole o código de convite ou token recebido de um membro ou administrador da comunidade.
+        </p>
+
+        <div class="form-group">
+          <label for="join-comm-code">Código de Convite (Token Base64)</label>
+          <textarea id="join-comm-code" class="form-control" rows="4" placeholder="Cole aqui o código de convite..."></textarea>
+        </div>
+
+        <button class="btn-publish" id="btn-submit-join-comm" style="width: 100%; justify-content: center; margin-top: 10px;">
+          Validar Convite & Sincronizar via P2P
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: CONVIDAR PESSOAS / COMPARTILHAR CONVITE -->
+  <div class="modal-overlay" id="modal-invite-share">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Convidar Pessoas para a Comunidade</h3>
+        <button class="modal-close-btn" data-close="modal-invite-share">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 12px;">
+          Envie o código abaixo para novos membros. Ao colar este código no aplicativo deles, eles sincronizarão todos os comunicados diretamente pela rede P2P com criptografia ponta a ponta:
+        </p>
+
+        <div class="form-group">
+          <textarea id="invite-code-display" class="form-control" rows="5" readonly style="font-family: var(--font-mono); font-size: 0.78rem; word-break: break-all;"></textarea>
+        </div>
+
+        <button class="btn-publish" id="btn-copy-invite-code" style="width: 100%; justify-content: center;">
+          Copiar Código de Convite
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 4: NÓS P2P DA REDE & TOPOLOGIA -->
+  <div class="modal-overlay" id="modal-peers">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Nós P2P da Rede & Descoberta</h3>
+        <button class="modal-close-btn" data-close="modal-peers">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display: flex; gap: 12px; margin-bottom: 14px;">
+          <div class="status-chip" id="modal-vps-chip">
+            <span class="pulse-dot online" id="vps-pulse-dot"></span>
+            <span id="vps-status-label">VPS: Online</span>
+          </div>
+          <div class="status-chip" id="modal-mesh-chip">
+            <span class="pulse-dot online" id="mesh-pulse-dot"></span>
+            <span id="mesh-status-label">Malha: 0 nós</span>
+          </div>
+          <div class="status-chip" id="modal-leader-chip">
+            <span>👑</span>
+            <span id="leader-status-label">Líder: --</span>
+          </div>
+        </div>
+
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
+          Computadores pessoais conectados na malha descentralizada:
+        </p>
+
+        <div class="peers-grid" id="modal-peers-list">
+          <!-- Gerado dinamicamente -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 5: PAINEL ADMINISTRATIVO & MEMBROS -->
+  <div class="modal-overlay" id="modal-admin">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Painel de Administração e Membros</h3>
+        <button class="modal-close-btn" data-close="modal-admin">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: rgba(0, 168, 132, 0.1); border: 1px solid rgba(0, 168, 132, 0.25); padding: 12px; border-radius: 8px; margin-bottom: 14px;">
+          <h4 style="color: var(--wa-green); font-size: 0.9rem;">Política de Segurança & Rotação de Chaves</h4>
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">
+            Ao revogar um usuário, o sistema executa automaticamente a <strong>Rotação de Chaves (Key Rotation)</strong>. Uma nova época criptográfica é gerada, tornando comunicados futuros inacessíveis ao membro excluído.
+          </p>
+        </div>
+
+        <div class="sidebar-section-title">Usuários Cadastrados</div>
+        <div id="admin-users-list" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Gerado dinamicamente -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 6: AUDITORIA IMUTÁVEL CRIPTOGRÁFICA -->
+  <div class="modal-overlay" id="modal-audit">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Cadeia de Auditoria Criptográfica</h3>
+        <button class="modal-close-btn" data-close="modal-audit">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="audit-integrity-status" style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.9rem; color: var(--wa-green); margin-bottom: 12px;">
+          ✓ Cadeia de Auditoria Verificada e 100% Íntegra
+        </div>
+
+        <div id="audit-logs-list" style="display: flex; flex-direction: column; gap: 10px; font-family: var(--font-mono); font-size: 0.75rem;">
+          <!-- Gerado dinamicamente -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 7: BACKUP & RESTAURAÇÃO -->
+  <div class="modal-overlay" id="modal-backup">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Exportar e Restaurar Histórico</h3>
+        <button class="modal-close-btn" data-close="modal-backup">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 14px;">
+          Você pode salvar uma cópia de segurança criptografada do banco SQLite local contendo todas as mensagens, pares e auditoria.
+        </p>
+
+        <a href="/api/export" download class="btn-publish" style="text-decoration: none; justify-content: center;" id="btn-download-backup">
+          Baixar Arquivo de Backup Criptografado (.JSON)
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 8: AUTENTICAÇÃO / LOGIN / PERFIL -->
+  <div class="modal-overlay" id="modal-auth">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="auth-modal-title">Autenticação do Usuário</h3>
+        <button class="modal-close-btn" data-close="modal-auth">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="auth-username">Nome de Usuário</label>
+          <input type="text" id="auth-username" class="form-control" placeholder="ex: alice_admin ou bob_membro">
+        </div>
+
+        <div class="form-group">
+          <label for="auth-password">Senha Secreta</label>
+          <input type="password" id="auth-password" class="form-control" placeholder="••••••••">
+        </div>
+
+        <div class="form-group" id="auth-role-group">
+          <label for="auth-role">Papel Inicial</label>
+          <select id="auth-role" class="form-control">
+            <option value="Membro">Membro (Leitura e Retransmissão P2P)</option>
+            <option value="Moderador">Moderador (Gestão de Membros)</option>
+            <option value="Administrador">Administrador (Publicação e Governança)</option>
+          </select>
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+          <button class="btn-publish" id="btn-submit-login" style="flex: 1; justify-content: center;">
+            Entrar
+          </button>
+          <button class="btn-header" id="btn-submit-register" style="flex: 1; justify-content: center;">
+            Criar Nova Conta
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 9: VISÃO DA COMUNIDADE & STATUS DA REDE P2P (PROMPT REQUISITO) -->
+  <div class="modal-overlay dash-modal-overlay" id="modal-network-dashboard">
+    <div class="modal-dialog dash-modal-dialog">
+      <div class="modal-header dash-modal-header">
+        <div class="dash-header-title-group">
+          <div class="dash-header-icon">🌐</div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Visão da Comunidade</h3>
+              <span class="dash-role-badge" id="dash-user-role-badge">Membro</span>
+              <span class="pulse-dot online" id="dash-live-dot" title="WebSocket /live/network conectado"></span>
+              <span style="font-size: 0.72rem; color: var(--wa-green); font-weight: 600;" id="dash-live-label">Ao Vivo</span>
+            </div>
+            <p style="font-size: 0.76rem; color: var(--text-muted); margin-top: 2px;">
+              Monitoramento transparente em tempo real da malha P2P, participantes e resiliência (Sem expor dados privados)
+            </p>
+          </div>
+        </div>
+
+        <div class="dash-header-actions">
+          <div class="dash-badge-updated" id="dash-last-updated-badge" title="Timestamp da última telemetria">Atualizado agora</div>
+          <button class="dash-btn-icon" id="dash-btn-refresh" title="Atualizar dados agora">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          </button>
+          <button class="modal-close-btn" data-close="modal-network-dashboard">&times;</button>
+        </div>
+      </div>
+
+      <!-- Abas de Navegação do Painel -->
+      <div class="dash-nav-tabs">
+        <button class="dash-tab-btn active" data-dash-tab="overview">
+          📊 Resumo da Rede
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="topology">
+          🗺️ Mapa da Topologia
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="members">
+          👥 Usuários & Membros
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="nodes">
+          💻 Nós P2P
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="devices">
+          📱 Celulares & Web
+        </button>
+        <button class="dash-tab-btn" data-dash-tab="timeline">
+          ⚡ Linha do Tempo Técnica
+        </button>
+      </div>
+
+      <div class="modal-body dash-modal-body">
+        <!-- ABA 1: RESUMO DA REDE (14 CARTÕES + INDICADORES DE FUNCIONAMENTO) -->
+        <div class="dash-tab-pane active" id="pane-dash-overview">
+          <!-- Banner de Aviso de Privacidade e Permissões -->
+          <div class="dash-privacy-banner" id="dash-privacy-banner">
+            <span class="dash-privacy-icon">🔒</span>
+            <div style="flex: 1;">
+              <strong>Privacidade & Segurança por Design:</strong>
+              <span>Este painel exibe apenas métricas anônimas e agregadas. Endereços IP públicos, localizações, chaves privadas, senhas, tokens de sessão e conteúdos de mensagens <strong>nunca</strong> são expostos.</span>
+            </div>
+            <div id="dash-view-mode-pill" class="dash-view-mode-pill">Modo: Completo (Admin)</div>
+          </div>
+
+          <!-- 14 Cartões de Métricas em Grade Moderna -->
+          <div class="dash-cards-grid">
+            <div class="dash-card">
+              <div class="dash-card-icon desktop">💻</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Desktops Online</span>
+                <span class="dash-card-value" id="card-desktop-online">0</span>
+                <span class="dash-card-sub" id="card-desktop-known">De 0 conhecidos</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon mobile">📱</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Celulares Conectados</span>
+                <span class="dash-card-value" id="card-mobile-connected">0</span>
+                <span class="dash-card-sub">Dispositivos móveis ativos</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon web">🌐</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Páginas Web / PWA</span>
+                <span class="dash-card-value" id="card-web-sessions">0</span>
+                <span class="dash-card-sub">Sessões de leitura ativas</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon members">👥</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Total de Membros</span>
+                <span class="dash-card-value" id="card-total-members">0</span>
+                <span class="dash-card-sub" id="card-members-breakdown">0 Admins • 0 Mods • 0 Membros</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon messages">📨</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Mensagens Sincronizadas</span>
+                <span class="dash-card-value" id="card-sync-messages">0</span>
+                <span class="dash-card-sub">Log auditado imutável</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon vps" id="icon-vps-state">☁️</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Estado da VPS</span>
+                <span class="dash-card-value" id="card-vps-state">ONLINE</span>
+                <span class="dash-card-sub" id="card-vps-sub">Bootstrap & Descoberta</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon p2p" id="icon-p2p-state">🛡️</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Estado da Malha P2P</span>
+                <span class="dash-card-value" id="card-p2p-state">AUTÔNOMA</span>
+                <span class="dash-card-sub" id="card-p2p-sub">Resistente a quedas</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon leader">👑</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Líder Atual (Raft)</span>
+                <span class="dash-card-value" id="card-leader-id">--</span>
+                <span class="dash-card-sub" id="card-leader-term">Termo 1 • Quorum Ativo</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon sync">⏱️</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Última Sincronização</span>
+                <span class="dash-card-value" id="card-last-sync">--:--</span>
+                <span class="dash-card-sub">Cadeia criptográfica em dia</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon direct">⚡</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Conexões Diretas</span>
+                <span class="dash-card-value" id="card-direct-connections">0</span>
+                <span class="dash-card-sub">P2P via STUN / NAT Traversal</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon relay">🔄</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Conexões via Relay</span>
+                <span class="dash-card-value" id="card-relay-connections">0</span>
+                <span class="dash-card-sub">Fallback para NAT restritivo</span>
+              </div>
+            </div>
+
+            <div class="dash-card">
+              <div class="dash-card-icon nat">📡</div>
+              <div class="dash-card-info">
+                <span class="dash-card-label">Tipo de NAT Detectado</span>
+                <span class="dash-card-value" id="card-nat-type" style="font-size: 1rem;">Resolvendo...</span>
+                <span class="dash-card-sub" id="card-nat-sub">RFC 5389 STUN</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Seção de Indicadores de Funcionamento P2P (Prompt Requisito 6) -->
+          <div class="dash-section-box">
+            <h4 class="dash-section-heading">Indicadores de Funcionamento P2P & Consenso</h4>
+            <div class="dash-indicators-grid">
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-vps-dot"></span>
+                <span>VPS Bootstrap: <strong id="ind-vps-text">Online</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-mesh-dot"></span>
+                <span>Nós P2P Online: <strong id="ind-mesh-text">0 conectados</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-dht-dot"></span>
+                <span>Descoberta & PEX: <strong id="ind-dht-text">Ativa</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-relay-dot"></span>
+                <span>Relay Criptografado: <strong id="ind-relay-text">Disponível</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-sync-dot"></span>
+                <span>Sincronização: <strong id="ind-sync-text">100% Atualizada</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-quorum-dot"></span>
+                <span>Quorum de Líder: <strong id="ind-quorum-text">Ativo (Maioria)</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-pending-dot"></span>
+                <span>Mensagens Pendentes: <strong id="ind-pending-text">0</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-reconnect-dot"></span>
+                <span>Reconexão Automática: <strong id="ind-reconnect-text">Monitorando</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-election-dot"></span>
+                <span>Última Eleição: <strong id="ind-election-text">Termo 1 Concluído</strong></span>
+              </div>
+              <div class="dash-indicator-pill">
+                <span class="pulse-dot online" id="ind-errors-dot"></span>
+                <span>Erros Recentes: <strong id="ind-errors-text">0 detectados</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 2: MAPA OU DIAGRAMA DA TOPOLOGIA (PROMPT REQUISITO 2) -->
+        <div class="dash-tab-pane" id="pane-dash-topology">
+          <div class="dash-topology-container">
+            <div class="dash-topology-toolbar">
+              <div class="dash-topo-legend">
+                <span class="topo-legend-item"><span class="topo-color-dot green"></span> Conectado Direto (P2P)</span>
+                <span class="topo-legend-item"><span class="topo-color-dot blue"></span> Conectado via Relay</span>
+                <span class="topo-legend-item"><span class="topo-color-dot yellow"></span> Sincronizando</span>
+                <span class="topo-legend-item"><span class="topo-color-dot gray"></span> Desconectado / Offline</span>
+                <span class="topo-legend-item"><span class="topo-color-dot red"></span> Erro / Não Autenticado</span>
+              </div>
+              <div class="dash-topo-actions">
+                <button class="dash-btn-sm" id="btn-recenter-topology">Centralizar Diagrama</button>
+              </div>
+            </div>
+
+            <!-- Canvas/SVG de Topologia Interativo -->
+            <div class="dash-svg-wrapper" id="dash-svg-wrapper">
+              <svg id="dash-topology-svg" width="100%" height="450" viewBox="0 0 800 450">
+                <!-- Desenhado via JavaScript com nós reais -->
+              </svg>
+            </div>
+
+            <!-- Card Flutuante de Detalhes do Nó Clicado -->
+            <div class="dash-node-popover" id="dash-node-popover" style="display: none;">
+              <div class="dash-popover-header">
+                <strong id="popover-node-name">Nó Selecionado</strong>
+                <button class="dash-popover-close" id="btn-close-popover">&times;</button>
+              </div>
+              <div class="dash-popover-body">
+                <div>ID Curto: <span id="popover-node-id" class="font-mono">--</span></div>
+                <div>Papel: <span id="popover-node-role">--</span></div>
+                <div>Método: <span id="popover-node-method">--</span></div>
+                <div>Estado: <span id="popover-node-status">--</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 3: LISTA DE USUÁRIOS DA COMUNIDADE (PROMPT REQUISITO 3) -->
+        <div class="dash-tab-pane" id="pane-dash-members">
+          <!-- Barra de Pesquisa e Filtros -->
+          <div class="dash-filter-bar">
+            <div class="dash-search-box">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+              <input type="text" id="dash-members-search" placeholder="Filtrar por nome de exibição ou apelido...">
+            </div>
+
+            <div class="dash-chips-row">
+              <button class="dash-chip active" data-member-filter="all">Todos</button>
+              <button class="dash-chip" data-member-filter="online">Online</button>
+              <button class="dash-chip" data-member-filter="offline">Offline</button>
+              <button class="dash-chip" data-member-filter="admin">Administradores</button>
+              <button class="dash-chip" data-member-filter="moderator">Moderadores</button>
+              <button class="dash-chip" data-member-filter="member">Membros</button>
+              <button class="dash-chip" data-member-filter="desktop">💻 Desktop</button>
+              <button class="dash-chip" data-member-filter="mobile">📱 Celular</button>
+              <button class="dash-chip" data-member-filter="web">🌐 Web</button>
+            </div>
+          </div>
+
+          <!-- Tabela de Membros -->
+          <div class="dash-table-wrapper">
+            <table class="dash-table" id="dash-members-table">
+              <thead>
+                <tr>
+                  <th>Membro / Usuário</th>
+                  <th>Papel</th>
+                  <th>Estado</th>
+                  <th>Dispositivo</th>
+                  <th>Última Atividade</th>
+                  <th>Sincronização</th>
+                  <th>Dispositivos Ativos</th>
+                </tr>
+              </thead>
+              <tbody id="dash-members-tbody">
+                <!-- Preenchido via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ABA 4: LISTA DE NÓS P2P (PROMPT REQUISITO 4) -->
+        <div class="dash-tab-pane" id="pane-dash-nodes">
+          <div class="dash-table-wrapper">
+            <table class="dash-table" id="dash-nodes-table">
+              <thead>
+                <tr>
+                  <th>Nó / Nome Amigável</th>
+                  <th>ID Curto</th>
+                  <th>Papel</th>
+                  <th>Estado</th>
+                  <th>Conexão</th>
+                  <th>Último Heartbeat</th>
+                  <th>Última Sincronização</th>
+                  <th>Mensagens Conhecidas</th>
+                  <th>Protocolo</th>
+                  <th>Tempo Conectado</th>
+                </tr>
+              </thead>
+              <tbody id="dash-nodes-tbody">
+                <!-- Preenchido via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ABA 5: DISPOSITIVOS MÓVEIS & PÁGINAS WEB (PROMPT REQUISITO 5) -->
+        <div class="dash-tab-pane" id="pane-dash-devices">
+          <div class="dash-devices-grid">
+            <div class="dash-device-card">
+              <div class="dash-device-icon mobile">📱</div>
+              <h4>Celulares na Comunidade</h4>
+              <div class="dash-device-metric" id="dev-mobile-active">0 Conectados</div>
+              <p class="dash-device-desc">Celulares sincronizados recentemente via PWA ou aplicativo com notificações push seguras.</p>
+              <div class="dash-device-stats">
+                <div>Notificações Web Push: <strong id="dev-push-status">VAPID Ativo</strong></div>
+                <div>Tokens Registrados: <strong id="dev-push-subs-count">0</strong></div>
+              </div>
+            </div>
+
+            <div class="dash-device-card">
+              <div class="dash-device-icon web">🌐</div>
+              <h4>Páginas Web / PWA Abertas</h4>
+              <div class="dash-device-metric" id="dev-web-active">0 Sessões</div>
+              <p class="dash-device-desc">Navegadores ativos recebendo comunicados oficiais transmitidos pelo nó desktop local.</p>
+              <div class="dash-device-stats">
+                <div>Sessões Locais Ativas: <strong id="dev-sessions-count">0</strong></div>
+                <div>Cache Offline: <strong id="dev-cache-status">ServiceWorker Ativo</strong></div>
+              </div>
+            </div>
+
+            <div class="dash-device-card">
+              <div class="dash-device-icon desktop">💻</div>
+              <h4>Nós Desktop (Backbone)</h4>
+              <div class="dash-device-metric" id="dev-desktop-active">0 Nós</div>
+              <p class="dash-device-desc">Computadores pessoais que armazenam e replicam o histórico criptográfico da comunidade.</p>
+              <div class="dash-device-stats">
+                <div>Banco SQLite: <strong>WAL & Migrado</strong></div>
+                <div>Integridade: <strong>100% Causal Hash Chain</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 6: LINHA DO TEMPO TÉCNICA (PROMPT REQUISITO 6) -->
+        <div class="dash-tab-pane" id="pane-dash-timeline">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
+              Eventos técnicos da infraestrutura P2P em tempo real. Zero conteúdo de mensagens privadas é registrado.
+            </p>
+            <span class="dash-tag live">Transmissão em Tempo Real</span>
+          </div>
+
+          <div class="dash-timeline-feed" id="dash-timeline-feed">
+            <!-- Preenchido via JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast de Notificações -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

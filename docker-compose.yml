@@ -1,0 +1,185 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # VPS BOOTSTRAP 1: Ponto de encontro primário, STUN e relay transparente
+  # ---------------------------------------------------------------------------
+  vps-bootstrap-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "src/server/vps_bootstrap.js"]
+    environment:
+      - PORT=4001
+      - HOST=0.0.0.0
+      - RELAY_RATE_LIMIT=60
+    ports:
+      - "4001:4001"
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/status').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # VPS BOOTSTRAP 2: Ponto de encontro secundário para alta disponibilidade
+  # ---------------------------------------------------------------------------
+  vps-bootstrap-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "src/server/vps_bootstrap.js"]
+    environment:
+      - PORT=4002
+      - HOST=0.0.0.0
+      - RELAY_RATE_LIMIT=60
+    ports:
+      - "4002:4002"
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4002/status').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # NÓ 1: ALICE (ADMINISTRADORA COM CHAVE ED25519 DE PUBLICAÇÃO)
+  # ---------------------------------------------------------------------------
+  node-alice-admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "src/node/p2p_node.js"]
+    environment:
+      - NODE_ID=node-alice-admin
+      - HTTP_PORT=5001
+      - P2P_PORT=6001
+      - ROLE=Administrador
+      - USERNAME=alice_admin
+      - BOOTSTRAPS=ws://vps-bootstrap-1:4001,ws://vps-bootstrap-2:4002
+      - AUTO_OPEN=false
+      - DATA_DIR=/data
+    volumes:
+      - alice_data:/data
+    ports:
+      - "5001:5001"
+      - "6001:6001"
+    depends_on:
+      vps-bootstrap-1:
+        condition: service_healthy
+      vps-bootstrap-2:
+        condition: service_healthy
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5001/api/status').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 6s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # NÓ 2: BOB (MODERADOR)
+  # ---------------------------------------------------------------------------
+  node-bob-moderador:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "src/node/p2p_node.js"]
+    environment:
+      - NODE_ID=node-bob-moderador
+      - HTTP_PORT=5002
+      - P2P_PORT=6002
+      - ROLE=Moderador
+      - USERNAME=bob_moderador
+      - BOOTSTRAPS=ws://vps-bootstrap-1:4001,ws://vps-bootstrap-2:4002
+      - AUTO_OPEN=false
+      - DATA_DIR=/data
+    volumes:
+      - bob_data:/data
+    ports:
+      - "5002:5002"
+      - "6002:6002"
+    depends_on:
+      vps-bootstrap-1:
+        condition: service_healthy
+      vps-bootstrap-2:
+        condition: service_healthy
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5002/api/status').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 6s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # NÓ 3: CARLOS (MEMBRO COMUM)
+  # ---------------------------------------------------------------------------
+  node-carlos-membro:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "src/node/p2p_node.js"]
+    environment:
+      - NODE_ID=node-carlos-membro
+      - HTTP_PORT=5003
+      - P2P_PORT=6003
+      - ROLE=Membro
+      - USERNAME=carlos_membro
+      - BOOTSTRAPS=ws://vps-bootstrap-1:4001,ws://vps-bootstrap-2:4002
+      - AUTO_OPEN=false
+      - DATA_DIR=/data
+    volumes:
+      - carlos_data:/data
+    ports:
+      - "5003:5003"
+      - "6003:6003"
+    depends_on:
+      vps-bootstrap-1:
+        condition: service_healthy
+      vps-bootstrap-2:
+        condition: service_healthy
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5003/api/status').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 6s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+
+networks:
+  mesh-net:
+    driver: bridge
+
+volumes:
+  alice_data:
+  bob_data:
+  carlos_data:

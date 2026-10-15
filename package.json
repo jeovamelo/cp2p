@@ -1,0 +1,32 @@
+{
+  "name": "comunidade-resiliente",
+  "version": "1.0.0",
+  "description": "Sistema P2P de Comunidades Resilientes e Descentralizadas - Imune a Quedas de Servidor",
+  "main": "src/node/p2p_node.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/desktop/desktop_runner.js",
+    "start:vps": "node src/server/vps_bootstrap.js",
+    "start:node": "node src/node/p2p_node.js",
+    "start:desktop": "node src/desktop/desktop_runner.js",
+    "cluster": "node scripts/run_cluster.js",
+    "simulate:kill": "node scripts/simulate_vps_kill.js",
+    "test": "node scripts/run_tests.js"
+  },
+  "keywords": [
+    "p2p",
+    "resilience",
+    "e2ee",
+    "ed25519",
+    "aes-256-gcm",
+    "crdt",
+    "hash-chain",
+    "sqlite",
+    "decentralized"
+  ],
+  "author": "Comunidade Resiliente",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
