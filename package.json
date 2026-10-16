@@ -11,7 +11,8 @@
     "start:desktop": "node src/desktop/desktop_runner.js",
     "cluster": "node scripts/run_cluster.js",
     "simulate:kill": "node scripts/simulate_vps_kill.js",
-    "test": "node scripts/run_tests.js"
+    "test": "node scripts/run_tests.js",
+    "build:exe": "node scripts/build_installer.js"
   },
   "keywords": [
     "p2p",

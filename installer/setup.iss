@@ -1,13 +1,13 @@
 ; ==============================================================================
 ; Inno Setup Script - Comunidade Resiliente
-; Compila o Instalador Executavel Nativo do Windows (Setup.exe)
+; Compila o Instalador Executável Nativo do Windows (ComunidadeResiliente-Setup.exe)
 ; ==============================================================================
 
 #define MyAppName "Comunidade Resiliente"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Comunidade Resiliente P2P"
 #define MyAppURL "https://github.com/comunidade-resiliente"
-#define MyAppExeName "Iniciar-Silencioso.vbs"
+#define MyAppExeName "ComunidadeResiliente.exe"
 
 [Setup]
 AppId={{9B2BDC96-DD63-4B7F-AF35-31E2599A7654}
@@ -22,7 +22,9 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\dist
-OutputBaseFilename=ComunidadeResiliente-Instalador-v1.0
+OutputBaseFilename=ComunidadeResiliente-Setup-v1.0
+SetupIconFile=app.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -35,12 +37,12 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "node_modules\*,data_test_simulation\*,dist\*,tests\*,*.git*"
+Source: "..\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "dist\*,data_test_simulation\*,tests\*,*.git*,*.tmp,*.log"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\installer\app.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\installer\app.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: shellexec postinstall nowait
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

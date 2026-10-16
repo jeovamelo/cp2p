@@ -114,7 +114,9 @@ Para a especificação técnica detalhada, consulte [`docs/architecture.md`](doc
 ## 💻 Início Rápido com 1 Clique (Usuários Leigos)
 
 ### 🪟 No Windows:
-- Dê um **duplo-clique no arquivo `INSTALAR-WINDOWS.bat`** na raiz da pasta.
+- **Instalador Gráfico Executável (.exe):** Execute o instalador [`dist/ComunidadeResiliente-Setup-v1.0.exe`](dist/ComunidadeResiliente-Setup-v1.0.exe) com assistente de instalação completo e ícone na Área de Trabalho.
+- **Instalação via Script (.bat):** Ou dê um **duplo-clique no arquivo `INSTALAR-WINDOWS.bat`** na raiz da pasta.
+- **Compilação de Novos Executáveis:** Para compilar o executável e o instalador novamente, execute `npm run build:exe`.
 - O instalador configura a aplicação em `%LocalAppData%\ComunidadeResiliente`, cria os atalhos na Área de Trabalho e Menu Iniciar, e abre o navegador automaticamente!
 
 ### 🐧 No Linux / 🍎 macOS:
