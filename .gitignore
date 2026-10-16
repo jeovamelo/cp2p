@@ -7,3 +7,4 @@ data_test_*/
 *.log
 .DS_Store
 Thumbs.db
+bin/

@@ -111,7 +111,9 @@ Para a especificação técnica detalhada, consulte [`docs/architecture.md`](doc
 Para que qualquer pessoa instale e use o sistema sem precisar abrir terminal ou ter conhecimento técnico:
 
 ### 🪟 Windows:
-- Basta dar um **duplo-clique no arquivo `INSTALAR-WINDOWS.bat`** na raiz do projeto.
+- **Instalador Executável (.exe):** Execute o instalador [`dist/ComunidadeResiliente-Setup-v1.0.exe`](dist/ComunidadeResiliente-Setup-v1.0.exe) com assistente gráfico completo e ícone na Área de Trabalho.
+- **Instalação via Script (.bat):** Ou dê um duplo-clique no arquivo `INSTALAR-WINDOWS.bat` na raiz do projeto.
+- **Compilação de Novos Executáveis:** Para compilar o executável e o instalador novamente, execute `npm run build:exe`.
 - O instalador configura a aplicação em `%LocalAppData%\ComunidadeResiliente`, cria o atalho **"Comunidade Resiliente"** na Área de Trabalho e no Menu Iniciar, e abre a interface no navegador automaticamente!
 - Para desinstalar, basta clicar no atalho *"Desinstalar Comunidade Resiliente"* no Menu Iniciar.
 
