@@ -58,6 +58,10 @@ class SystemConfig {
       this.ALLOWED_ORIGINS = new Set([
         `https://${this.APP_DOMAIN}`,
         this.APP_URL.toLowerCase(),
+        `http://localhost:${this.HTTP_PORT}`,
+        `http://127.0.0.1:${this.HTTP_PORT}`,
+        `http://localhost:5001`,
+        `http://127.0.0.1:5001`,
         ...configuredOrigins
       ]);
     } else {
@@ -114,6 +118,21 @@ class SystemConfig {
   isOriginAllowed(origin) {
     if (!origin) return true; // Requisições locais/same-origin sem header Origin
     const norm = origin.trim().toLowerCase();
+
+    // Sempre permite origens locais de loopback (interface desktop local e nós P2P locais)
+    if (
+      norm.startsWith('http://localhost:') ||
+      norm === 'http://localhost' ||
+      norm.startsWith('http://127.0.0.1:') ||
+      norm === 'http://127.0.0.1' ||
+      norm.startsWith('http://[::1]:') ||
+      norm === 'http://[::1]' ||
+      norm.startsWith('https://localhost:') ||
+      norm === 'https://localhost'
+    ) {
+      return true;
+    }
+
     return this.ALLOWED_ORIGINS.has(norm);
   }
 

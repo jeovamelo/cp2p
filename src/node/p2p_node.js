@@ -297,7 +297,8 @@ class P2PNode {
     // 3. CORS Seguro
     const origin = req.headers.origin;
     if (origin) {
-      if (SystemConfig.isOriginAllowed(origin)) {
+      const isSameOrigin = origin.toLowerCase() === `http://${hostHeader}`.toLowerCase() || origin.toLowerCase() === `https://${hostHeader}`.toLowerCase();
+      if (isSameOrigin || SystemConfig.isOriginAllowed(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
