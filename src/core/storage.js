@@ -542,7 +542,16 @@ class StorageManager {
     return suggestions;
   }
 
-  createPseudonymUser({ id, username, publicKey, encryptedPrivateKey, recoveryCodeHash, deviceId, role, status }) {
+  createPseudonymUser(userData) {
+    const id = userData.id;
+    const username = (userData.username || '').trim();
+    const publicKey = userData.publicKey || userData.public_key || '';
+    const encryptedPrivateKey = userData.encryptedPrivateKey || userData.encrypted_private_key || null;
+    const recoveryCodeHash = userData.recoveryCodeHash || userData.recovery_code_hash || null;
+    const deviceId = userData.deviceId || userData.device_id || null;
+    const role = userData.role || 'Membro';
+    const status = userData.status || 'active';
+
     const stmt = this.db.prepare(`
       INSERT INTO users (id, username, password_hash, public_key, encrypted_private_key, role, status, created_at, recovery_code_hash, is_pseudonym, device_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
@@ -550,15 +559,15 @@ class StorageManager {
     const now = Date.now();
     stmt.run(
       id,
-      username.trim(),
+      username,
       recoveryCodeHash || 'PSEUDONYM_PASSWORDLESS',
       publicKey,
-      encryptedPrivateKey || null,
-      role || 'Membro',
-      status || 'active',
+      encryptedPrivateKey,
+      role,
+      status,
       now,
-      recoveryCodeHash || null,
-      deviceId || null
+      recoveryCodeHash,
+      deviceId
     );
     return this.getUserByUsername(username);
   }
@@ -648,7 +657,9 @@ class StorageManager {
 
   // --- CONTROLE DE CADASTROS ABUSIVOS (RATE LIMIT) ---
   checkRegistrationRateLimit(clientIdentifier, maxRegistrations = 5, windowMs = 15 * 60 * 1000) {
-    if (!clientIdentifier) return { allowed: true };
+    if (!clientIdentifier || clientIdentifier === '::1' || clientIdentifier === '127.0.0.1' || clientIdentifier === 'localhost' || clientIdentifier.includes('127.0.0.1')) {
+      return { allowed: true, remaining: 999 };
+    }
     const now = Date.now();
     const row = this.db.prepare(`SELECT * FROM registration_rate_limits WHERE client_identifier = ?`).get(clientIdentifier);
 

@@ -6,7 +6,27 @@
 const { exec } = require('child_process');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
+const net = require('net');
 const P2PNode = require('../node/p2p_node');
+
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer()
+      .once('error', () => resolve(false))
+      .once('listening', () => {
+        tester.once('close', () => resolve(true)).close();
+      })
+      .listen(port, '0.0.0.0');
+  });
+}
+
+async function findAvailablePort(startPort, maxAttempts = 10) {
+  for (let p = startPort; p < startPort + maxAttempts; p++) {
+    if (await isPortAvailable(p)) return p;
+  }
+  return startPort;
+}
 
 async function main() {
   console.log('====================================================');
@@ -14,12 +34,27 @@ async function main() {
   console.log('  Plataforma Autônoma e Resiliente de Mensagens');
   console.log('====================================================');
 
-  const httpPort = parseInt(process.env.HTTP_PORT || '5001', 10);
-  const p2pPort = parseInt(process.env.P2P_PORT || '6001', 10);
+  let httpPort = parseInt(process.env.HTTP_PORT || '5001', 10);
+  let p2pPort = parseInt(process.env.P2P_PORT || '6001', 10);
+
+  if (!process.env.HTTP_PORT) {
+    httpPort = await findAvailablePort(httpPort);
+  }
+  if (!process.env.P2P_PORT) {
+    p2pPort = await findAvailablePort(p2pPort);
+  }
+
   const role = process.env.ROLE || 'Membro';
   const username = process.env.USERNAME || (role === 'Administrador' ? 'admin_principal' : `usuario_${os.hostname().toLowerCase().replace(/[^a-z0-9]/g, '')}`);
   const dataDir = process.env.DATA_DIR || path.join(os.homedir(), '.comunidade-resiliente', 'data');
   const bootstraps = process.env.BOOTSTRAPS ? process.env.BOOTSTRAPS.split(',') : ['ws://127.0.0.1:4001'];
+
+  // Registra porta ativa para que o inicializador C# e atalhos abram o endereço exato
+  try {
+    const configDir = path.join(os.homedir(), '.comunidade-resiliente');
+    if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'active_port.txt'), httpPort.toString(), 'utf8');
+  } catch (e) {}
 
   console.log(`[Desktop] Sistema Operacional: ${os.type()} ${os.arch()}`);
   console.log(`[Desktop] Diretório de Dados: ${dataDir}`);

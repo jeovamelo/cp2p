@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const workspaceDir = 'c:\\Users\\jeova\\.gemini\\antigravity-ide\\brain\\cp2p\\cp2p';
+const workspaceDir = path.resolve(__dirname, '..');
 process.chdir(workspaceDir);
 
 console.log('=== INICIANDO CONSTRUÇÃO DO EXECUTÁVEL E INSTALADOR WINDOWS ===\n');
@@ -171,7 +171,17 @@ console.log('✓ installer/setup.iss configurado com sucesso!');
 
 // 7. Compilar o Instalador Executável (Setup.exe)
 console.log('\n[5/5] Compilando instalador final (.exe) com Inno Setup Compiler...');
-const isccPath = 'C:\\Users\\jeova\\AppData\\Local\\Programs\\Inno Setup 6\\ISCC.exe';
+const candidateIsccPaths = [
+  'C:\\Users\\jeova\\AppData\\Local\\Programs\\Antigravity IDE\\resources\\app\\node_modules\\innosetup\\bin\\ISCC.exe',
+  'C:\\Users\\jeova\\AppData\\Local\\Programs\\Inno Setup 6\\ISCC.exe',
+  'C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe',
+  'C:\\Program Files\\Inno Setup 6\\ISCC.exe'
+];
+const isccPath = candidateIsccPaths.find(p => fs.existsSync(p));
+if (!isccPath) {
+  throw new Error('ISCC.exe (Inno Setup Compiler) não encontrado nas localizações padrão.');
+}
+console.log(`Usando compilador Inno Setup: ${isccPath}`);
 execSync(`"${isccPath}" "${path.join('installer', 'setup.iss')}"`, { stdio: 'inherit' });
 
 if (!fs.existsSync('dist')) {

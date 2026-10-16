@@ -141,8 +141,24 @@ namespace ComunidadeResilienteDesktop
             _trayIcon.DoubleClick += (s, e) => OpenAppWindow();
         }
 
+        private static void UpdateAppUrl()
+        {
+            try {
+                string homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                string portFile = Path.Combine(homeDir, ".comunidade-resiliente", "active_port.txt");
+                if (File.Exists(portFile)) {
+                    string portText = File.ReadAllText(portFile).Trim();
+                    int p;
+                    if (int.TryParse(portText, out p) && p > 0 && p < 65536) {
+                        _appUrl = "http://localhost:" + p;
+                    }
+                }
+            } catch {}
+        }
+
         private static void OpenAppWindow()
         {
+            UpdateAppUrl();
             try {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = "msedge.exe";

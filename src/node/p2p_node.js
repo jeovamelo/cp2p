@@ -641,11 +641,15 @@ class P2PNode {
         const newUser = {
           id: userId,
           username: val.cleanUsername,
+          publicKey: keypair.publicKey,
           public_key: keypair.publicKey,
+          encryptedPrivateKey: JSON.stringify(encPrivKey),
           encrypted_private_key: JSON.stringify(encPrivKey),
           role: effectiveRole,
           status: initialStatus,
+          recoveryCodeHash,
           recovery_code_hash: recoveryCodeHash,
+          deviceId,
           device_id: deviceId
         };
 
