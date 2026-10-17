@@ -18,6 +18,10 @@ class CryptoEngine {
     return { publicKey, privateKey };
   }
 
+  static generateKeyPair() {
+    return this.generateEd25519KeyPair();
+  }
+
   /**
    * Assina digitalmente uma mensagem ou payload usando a chave privada Ed25519 do Administrador
    * @param {string|object} data - Dados a serem assinados

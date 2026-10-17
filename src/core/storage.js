@@ -500,6 +500,11 @@ class StorageManager {
     return this.db.prepare(`SELECT * FROM users WHERE LOWER(username) = LOWER(?)`).get(username.trim());
   }
 
+  getUserById(id) {
+    if (!id || typeof id !== 'string') return null;
+    return this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(id.trim());
+  }
+
   isUsernameAvailable(username) {
     const user = this.getUserByUsername(username);
     return !user;

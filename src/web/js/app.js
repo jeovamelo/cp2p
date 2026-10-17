@@ -593,24 +593,33 @@ class AppController {
 
   createMessageCard(msg) {
     const card = document.createElement('div');
-    const isOutgoing = this.state.user && msg.author_pubkey && this.state.user.publicKey && 
-      (msg.author_pubkey.replace(/-----[^\n]+-----|\s+/g, '') === this.state.user.publicKey.replace(/-----[^\n]+-----|\s+/g, ''));
+    const authorPubkey = msg.author_pubkey || msg.authorPubkey || '';
+    const userPubkey = (this.state.user && (this.state.user.publicKey || this.state.user.public_key)) || '';
+    const isOutgoing = !!(userPubkey && authorPubkey && 
+      (authorPubkey.replace(/-----[^\n]+-----|\s+/g, '') === userPubkey.replace(/-----[^\n]+-----|\s+/g, '')));
 
-    card.className = `cp2p-message-card ${isOutgoing ? 'outgoing' : ''} ${msg.is_pinned === 1 ? 'pinned' : ''}`;
+    card.className = `cp2p-message-card ${isOutgoing ? 'outgoing' : ''} ${(msg.is_pinned === 1 || msg.isPinned) ? 'pinned' : ''}`;
     card.id = `msg-${msg.id}`;
 
-    const dateStr = new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const rawTs = msg.timestamp || msg.created_at || Date.now();
+    const dateObj = new Date(rawTs);
+    const dateStr = !isNaN(dateObj.getTime())
+      ? dateObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const seq = msg.sequence != null ? msg.sequence : (msg.id ? msg.id.slice(0, 6) : 1);
+    const authorName = msg.authorName || msg.author_name || (isOutgoing ? (this.state.user?.username || 'Você') : 'Membro');
+    const authorRole = msg.authorRole || msg.author_role || (isOutgoing ? (this.state.user?.role || 'Membro') : 'Membro');
 
     // Header da Mensagem
     let headerHtml = `
       <div class="cp2p-msg-header">
         <div class="cp2p-msg-author-row">
-          <span class="cp2p-msg-author">${this.escapeHtml(msg.authorName || 'Membro')}</span>
-          <span class="cp2p-role-tag ${msg.authorRole === 'Administrador' ? 'admin' : ''}">${msg.authorRole || 'Membro'}</span>
+          <span class="cp2p-msg-author">${this.escapeHtml(authorName)}</span>
+          <span class="cp2p-role-tag ${authorRole === 'Administrador' ? 'admin' : ''}">${this.escapeHtml(authorRole)}</span>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          ${msg.is_pinned === 1 ? '<span title="Mensagem Fixada">📌</span>' : ''}
-          <span class="cp2p-msg-time">#${msg.sequence} • ${dateStr}</span>
+          ${(msg.is_pinned === 1 || msg.isPinned) ? '<span title="Mensagem Fixada">📌</span>' : ''}
+          <span class="cp2p-msg-time">#${seq} • ${dateStr}</span>
         </div>
       </div>
     `;
@@ -1356,9 +1365,12 @@ class AppController {
 
     switch (packet.type) {
       case 'NEW_MESSAGE':
-        if (packet.message && packet.message.community_id === this.state.activeCommunityId) {
-          if (packet.message.channel_id === this.state.activeChannelId) {
-            this.appendMessage(packet.message);
+        if (packet.message) {
+          const m = packet.message;
+          const commId = m.communityId || m.community_id;
+          const chanId = m.channelId || m.channel_id;
+          if (commId === this.state.activeCommunityId && chanId === this.state.activeChannelId) {
+            this.appendMessage(m);
           }
         }
         break;

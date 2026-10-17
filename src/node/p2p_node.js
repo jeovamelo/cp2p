@@ -48,6 +48,7 @@ class P2PNode {
     this.currentUser = null;
     this.activePrivateKeyPem = null;
     this.activeChannelKeyHex = null;
+    this.unlockedKeys = new Map();
 
     const dbPath = path.join(this.dataDir, 'comunidade.db');
     this.storage = new StorageManager(dbPath);
@@ -71,6 +72,15 @@ class P2PNode {
     this.httpServer = null;
     this.uiWss = null;
     this.uiClients = new Set();
+  }
+
+  getDeviceVaultKey() {
+    let vaultKey = this.storage.getStorageSetting('device_vault_key');
+    if (!vaultKey) {
+      vaultKey = crypto.randomBytes(32).toString('hex');
+      this.storage.setStorageSetting('device_vault_key', vaultKey);
+    }
+    return vaultKey;
   }
 
   async start() {
@@ -166,12 +176,35 @@ class P2PNode {
       }
     }
 
+    const deviceVaultKey = this.getDeviceVaultKey();
+
+    // Auto-desbloqueia chaves privadas armazenadas neste nó local
+    const allUsers = this.storage.getAllUsers();
+    for (const u of allUsers) {
+      if (u.encrypted_private_key) {
+        try {
+          const encObj = JSON.parse(u.encrypted_private_key);
+          let privKey = null;
+          try {
+            privKey = CryptoEngine.decryptPrivateKey(encObj, deviceVaultKey);
+          } catch (e) {
+            if (this.config.password) {
+              try { privKey = CryptoEngine.decryptPrivateKey(encObj, this.config.password); } catch (e2) {}
+            }
+          }
+          if (privKey) {
+            this.unlockedKeys.set(u.id, privKey);
+            this.unlockedKeys.set(u.username, privKey);
+          }
+        } catch (e) {}
+      }
+    }
+
     if (this.config.username) {
       let user = this.storage.getUserByUsername(this.config.username);
       if (!user) {
         const keypair = CryptoEngine.generateEd25519KeyPair();
-        // Não utiliza senhas estáticas fracas em produção
-        const password = this.config.password || crypto.randomBytes(8).toString('hex');
+        const password = this.config.password || deviceVaultKey;
         const passwordHash = CryptoEngine.hashPassword(password);
         const encryptedPrivKey = CryptoEngine.encryptPrivateKey(keypair.privateKey, password);
 
@@ -194,14 +227,32 @@ class P2PNode {
 
         this.currentUser = user;
         this.activePrivateKeyPem = keypair.privateKey;
+        this.unlockedKeys.set(user.id, keypair.privateKey);
+        this.unlockedKeys.set(user.username, keypair.privateKey);
       } else {
         this.currentUser = user;
-        if (this.config.password) {
+        if (this.unlockedKeys.has(user.id)) {
+          this.activePrivateKeyPem = this.unlockedKeys.get(user.id);
+        } else if (this.config.password) {
           try {
             const encObj = JSON.parse(user.encrypted_private_key);
             this.activePrivateKeyPem = CryptoEngine.decryptPrivateKey(encObj, this.config.password);
+            if (this.activePrivateKeyPem) {
+              this.unlockedKeys.set(user.id, this.activePrivateKeyPem);
+              this.unlockedKeys.set(user.username, this.activePrivateKeyPem);
+            }
           } catch (e) {}
         }
+      }
+    }
+
+    // Se a chave ativa ainda não foi definida, busca o usuário administrador ou primeiro usuário desbloqueado
+    if (!this.activePrivateKeyPem && allUsers.length > 0) {
+      const adminUser = allUsers.find(u => u.role === 'Administrador' && this.unlockedKeys.has(u.id));
+      const anyUnlocked = adminUser || allUsers.find(u => this.unlockedKeys.has(u.id));
+      if (anyUnlocked) {
+        this.currentUser = anyUnlocked;
+        this.activePrivateKeyPem = this.unlockedKeys.get(anyUnlocked.id);
       }
     }
   }
@@ -378,23 +429,84 @@ class P2PNode {
     // Auxiliar para extrair usuário da sessão
     const getSessionUser = () => {
       const authHeader = req.headers['authorization'];
-      if (!authHeader) return this.currentUser;
-      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-      const session = this.storage.getSession(token);
-      if (session) {
+      let userObj = null;
+
+      if (authHeader) {
+        const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+        const session = this.storage.getSession(token);
+        if (session) {
+          const dbUser = this.storage.getUserById(session.user_id) || this.storage.getUserByUsername(session.username);
+          if (dbUser) {
+            userObj = dbUser;
+          } else {
+            userObj = {
+              id: session.user_id,
+              username: session.username,
+              role: session.role,
+              status: 'active'
+            };
+          }
+        }
+      }
+
+      if (!userObj) {
+        userObj = this.currentUser;
+      }
+
+      if (userObj) {
+        let privKey = this.unlockedKeys.get(userObj.id) || this.unlockedKeys.get(userObj.username);
+        if (!privKey && userObj.encrypted_private_key) {
+          try {
+            const encObj = JSON.parse(userObj.encrypted_private_key);
+            try {
+              privKey = CryptoEngine.decryptPrivateKey(encObj, this.getDeviceVaultKey());
+            } catch (e1) {
+              if (this.config.password) {
+                privKey = CryptoEngine.decryptPrivateKey(encObj, this.config.password);
+              }
+            }
+            if (privKey) {
+              this.unlockedKeys.set(userObj.id, privKey);
+              this.unlockedKeys.set(userObj.username, privKey);
+            }
+          } catch (e) {}
+        }
+        if (!privKey && this.activePrivateKeyPem) {
+          privKey = this.activePrivateKeyPem;
+        }
+        if (privKey && !this.activePrivateKeyPem) {
+          this.activePrivateKeyPem = privKey;
+          this.currentUser = userObj;
+        }
+
         return {
-          id: session.user_id,
-          username: session.username,
-          role: session.role
+          id: userObj.id,
+          username: userObj.username,
+          role: userObj.role,
+          status: userObj.status || 'active',
+          publicKey: userObj.public_key || userObj.publicKey,
+          public_key: userObj.public_key || userObj.publicKey,
+          is_pseudonym: userObj.is_pseudonym,
+          privateKeyPem: privKey
         };
       }
-      return this.currentUser;
+
+      return null;
     };
 
     try {
       // 1. Status Geral do Nó
       if (pathname === '/api/status' && req.method === 'GET') {
         const comm = this.storage.getCommunity('geral');
+        const sessionUser = getSessionUser();
+        const displayUser = sessionUser || (this.currentUser ? {
+          id: this.currentUser.id,
+          username: this.currentUser.username,
+          role: this.currentUser.role,
+          publicKey: this.currentUser.public_key,
+          isUnlocked: !!this.activePrivateKeyPem
+        } : null);
+
         return sendJson(200, {
           nodeId: this.nodeId,
           role: this.p2p.role,
@@ -403,12 +515,12 @@ class P2PNode {
           community: comm,
           network: this.p2p.getNetworkStatus(),
           networkOverview: this.p2p.getNetworkOverview(),
-          user: this.currentUser ? {
-            id: this.currentUser.id,
-            username: this.currentUser.username,
-            role: this.currentUser.role,
-            publicKey: this.currentUser.public_key,
-            isUnlocked: !!this.activePrivateKeyPem
+          user: displayUser ? {
+            id: displayUser.id,
+            username: displayUser.username,
+            role: displayUser.role,
+            publicKey: displayUser.publicKey || displayUser.public_key,
+            isUnlocked: !!(displayUser.privateKeyPem || this.activePrivateKeyPem)
           } : null
         });
       }
@@ -626,8 +738,8 @@ class P2PNode {
         // Geração automática de par de chaves Ed25519
         const keypair = CryptoEngine.generateEd25519KeyPair();
 
-        // Geração de chave de cofre local de 256 bits protegida
-        const vaultKey = crypto.randomBytes(32).toString('hex');
+        // Criptografia com a chave de cofre persistente deste dispositivo
+        const vaultKey = this.getDeviceVaultKey();
         const encPrivKey = CryptoEngine.encryptPrivateKey(keypair.privateKey, vaultKey);
 
         // Código de recuperação seguro de uso pessoal (opcional)
@@ -657,8 +769,18 @@ class P2PNode {
         this.storage.createPseudonymUser(newUser);
         this.currentUser = newUser;
         this.activePrivateKeyPem = keypair.privateKey;
+        this.unlockedKeys.set(newUser.id, keypair.privateKey);
+        this.unlockedKeys.set(newUser.username, keypair.privateKey);
         this.p2p.role = newUser.role;
         this.p2p.consensus.role = newUser.role;
+
+        if (newUser.role === 'Administrador') {
+          const comm = this.storage.getCommunity(targetCommunityId || 'geral');
+          if (comm && (comm.genesis_admin_pubkey === 'GENESIS_ADMIN_PENDING' || !comm.genesis_admin_pubkey)) {
+            comm.genesis_admin_pubkey = newUser.public_key;
+            this.storage.saveCommunity(comm);
+          }
+        }
 
         // Se o convite requer aprovação, cria a solicitação de entrada (Join Request)
         if (initialStatus === 'pending') {
@@ -891,12 +1013,18 @@ class P2PNode {
 
       // 3. Gestão de Comunidades e Convites
       if (pathname === '/api/communities' && req.method === 'GET') {
+        const sessionUser = getSessionUser();
+        const activeUser = sessionUser || this.currentUser;
         const communities = this.storage.getAllCommunities().map(c => {
           const messages = this.storage.getMessagesByCommunity(c.id, 100);
           const latest = messages[messages.length - 1];
-          const isAdmin = !!(this.currentUser && (
-            this.currentUser.role === 'Administrador' ||
-            (c.genesis_admin_pubkey && this.currentUser.public_key.replace(/-----[^\n]+-----|\s+/g, '') === c.genesis_admin_pubkey.replace(/-----[^\n]+-----|\s+/g, ''))
+          const userPub = (activeUser && (activeUser.publicKey || activeUser.public_key)) || '';
+          const cleanUserPub = userPub.replace(/-----[^\n]+-----|\s+/g, '');
+          const cleanGenPub = (c.genesis_admin_pubkey || '').replace(/-----[^\n]+-----|\s+/g, '');
+          const isAdmin = !!(activeUser && (
+            activeUser.role === 'Administrador' ||
+            activeUser.role === 'Moderador' ||
+            (cleanGenPub && cleanUserPub === cleanGenPub)
           ));
           return {
             ...c,
@@ -916,7 +1044,9 @@ class P2PNode {
 
         const id = 'comm-' + name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 25) + '-' + Math.floor(100 + Math.random() * 900);
         const initialKey = CryptoEngine.generateChannelKey();
-        const genesisAdmin = this.currentUser ? this.currentUser.public_key : 'GENESIS_ADMIN_PENDING';
+        const sessionUser = getSessionUser();
+        const activeUser = sessionUser || this.currentUser;
+        const genesisAdmin = (activeUser && (activeUser.publicKey || activeUser.public_key)) || 'GENESIS_ADMIN_PENDING';
 
         const newComm = {
           id,
@@ -1251,8 +1381,9 @@ class P2PNode {
 
         const user = getSessionUser();
         const isAdminRole = user && (user.role === 'Administrador' || user.role === 'Moderador');
-        const isGenesisAdmin = user && user.publicKey &&
-          (user.publicKey.replace(/-----[^\n]+-----|\s+/g, '') === (comm.genesis_admin_pubkey || '').replace(/-----[^\n]+-----|\s+/g, ''));
+        const userPub = (user && (user.publicKey || user.public_key)) || '';
+        const isGenesisAdmin = userPub &&
+          (userPub.replace(/-----[^\n]+-----|\s+/g, '') === (comm.genesis_admin_pubkey || '').replace(/-----[^\n]+-----|\s+/g, ''));
         const isAuthorizedAuthor = isAdminRole || isGenesisAdmin || (allowMemberPosts && user && user.status === 'active');
 
         if (!isAuthorizedAuthor) {
@@ -1263,7 +1394,10 @@ class P2PNode {
           });
         }
 
-        if (!this.activePrivateKeyPem) {
+        const authorPrivateKey = (user && user.privateKeyPem) || this.activePrivateKeyPem;
+        const authorPublicKey = userPub || (this.currentUser && this.currentUser.public_key);
+
+        if (!authorPrivateKey || !authorPublicKey) {
           return sendJson(401, { error: 'Chave privada não está desbloqueada nesta sessão.' });
         }
 
@@ -1290,8 +1424,8 @@ class P2PNode {
           channelId,
           plaintext: text,
           channelKeyHex: channelKey,
-          authorPublicKey: this.currentUser.public_key,
-          authorPrivateKey: this.activePrivateKeyPem,
+          authorPublicKey,
+          authorPrivateKey,
           epoch: comm.current_epoch,
           attachmentType: attachmentType || (fileHash ? 'file' : null),
           attachmentData: attachmentData || null,
@@ -1306,14 +1440,15 @@ class P2PNode {
 
         this.p2p.publishMessage(signedMessage);
 
+        const formatted = this.formatMessageForUI(signedMessage);
         this.broadcastToUI({
           type: 'NEW_MESSAGE',
-          message: this.formatMessageForUI(signedMessage)
+          message: formatted
         });
 
         return sendJson(201, {
           success: true,
-          message: this.formatMessageForUI(signedMessage)
+          message: formatted
         });
       }
 
@@ -1336,6 +1471,13 @@ class P2PNode {
 
         if (!isAdmin && !allowMemberPosts) {
           return sendJson(403, { error: 'Você não tem permissão para publicar no canal de destino.' });
+        }
+
+        const forwardAuthorPrivateKey = (user && user.privateKeyPem) || this.activePrivateKeyPem;
+        const forwardAuthorPublicKey = (user && (user.publicKey || user.public_key)) || (this.currentUser && this.currentUser.public_key);
+
+        if (!forwardAuthorPrivateKey || !forwardAuthorPublicKey) {
+          return sendJson(401, { error: 'Chave privada não está desbloqueada nesta sessão.' });
         }
 
         const targetComm = this.storage.getCommunity(targetCommunityId);
@@ -1362,8 +1504,8 @@ class P2PNode {
           channelId: targetChannelId,
           plaintext: forwardedText,
           channelKeyHex: targetKey,
-          authorPublicKey: this.currentUser.public_key,
-          authorPrivateKey: this.activePrivateKeyPem,
+          authorPublicKey: forwardAuthorPublicKey,
+          authorPrivateKey: forwardAuthorPrivateKey,
           epoch: targetComm.current_epoch,
           attachmentType: originalMsg.attachment_type,
           attachmentData: originalMsg.attachment_data,
@@ -1379,14 +1521,15 @@ class P2PNode {
         });
 
         this.p2p.publishMessage(forwardedSignedMsg);
+        const formattedForward = this.formatMessageForUI(forwardedSignedMsg);
         this.broadcastToUI({
           type: 'NEW_MESSAGE',
-          message: this.formatMessageForUI(forwardedSignedMsg)
+          message: formattedForward
         });
 
         return sendJson(201, {
           success: true,
-          message: this.formatMessageForUI(forwardedSignedMsg)
+          message: formattedForward
         });
       }
 
@@ -1774,7 +1917,13 @@ class P2PNode {
     }
 
     const authorUser = this.storage.getUserByPublicKey(msg.author_pubkey);
-    const authorName = authorUser ? authorUser.username : `Admin (${msg.author_pubkey.substring(0, 10)}...)`;
+    const comm = this.storage.getCommunity(msg.community_id);
+    const cleanAuthorPub = (msg.author_pubkey || '').replace(/-----[^\n]+-----|\s+/g, '');
+    const cleanGenesisPub = (comm && comm.genesis_admin_pubkey) ? comm.genesis_admin_pubkey.replace(/-----[^\n]+-----|\s+/g, '') : '';
+    const isGenesis = cleanGenesisPub && cleanAuthorPub === cleanGenesisPub;
+
+    const authorName = authorUser ? authorUser.username : (isGenesis ? 'Administrador' : `Membro (${cleanAuthorPub.substring(0, 8)})`);
+    const authorRole = authorUser ? authorUser.role : (isGenesis ? 'Administrador' : 'Membro');
 
     let linkPreview = null;
     if (msg.link_preview) {
@@ -1786,37 +1935,63 @@ class P2PNode {
     }
 
     const reactions = this.storage.getReactionsForMessage(msg.id);
+    const ts = msg.timestamp || msg.created_at || Date.now();
 
     return {
       id: msg.id,
-      sequence: msg.sequence,
+      sequence: msg.sequence != null ? msg.sequence : 1,
       communityId: msg.community_id,
+      community_id: msg.community_id,
       channelId: msg.channel_id || 'avisos',
+      channel_id: msg.channel_id || 'avisos',
       prevHash: msg.prev_hash,
+      prev_hash: msg.prev_hash,
       authorName,
+      author_name: authorName,
+      authorRole,
+      author_role: authorRole,
       authorPubkey: msg.author_pubkey,
+      author_pubkey: msg.author_pubkey,
       text: decryptedText,
       isDecrypted,
       epoch: msg.epoch,
       attachmentType: msg.attachment_type,
+      attachment_type: msg.attachment_type,
       attachmentData: msg.attachment_data,
+      attachment_data: msg.attachment_data,
       fileHash: msg.file_hash || null,
+      file_hash: msg.file_hash || null,
       fileName: msg.file_name || null,
+      file_name: msg.file_name || null,
       fileSize: msg.file_size || null,
+      file_size: msg.file_size || null,
       fileMime: msg.file_mime || null,
+      file_mime: msg.file_mime || null,
       fileChunksTotal: msg.file_chunks_total || null,
+      file_chunks_total: msg.file_chunks_total || null,
       linkPreview,
+      link_preview: linkPreview,
       replyToId: msg.reply_to_id || null,
+      reply_to_id: msg.reply_to_id || null,
       forwardedFromChannelId: msg.forwarded_from_channel_id || null,
+      forwarded_from_channel_id: msg.forwarded_from_channel_id || null,
       forwardedFromCommunityId: msg.forwarded_from_community_id || null,
+      forwarded_from_community_id: msg.forwarded_from_community_id || null,
       forwardedOriginAuthor: msg.forwarded_origin_author || null,
+      forwarded_origin_author: msg.forwarded_origin_author || null,
       isPinned: !!msg.is_pinned,
+      is_pinned: msg.is_pinned ? 1 : 0,
       pinnedAt: msg.pinned_at || null,
+      pinned_at: msg.pinned_at || null,
       pinnedBy: msg.pinned_by || null,
+      pinned_by: msg.pinned_by || null,
       isEdited: !!msg.is_edited,
+      is_edited: msg.is_edited ? 1 : 0,
       editedAt: msg.edited_at || null,
+      edited_at: msg.edited_at || null,
       reactions,
-      timestamp: msg.timestamp,
+      timestamp: ts,
+      created_at: ts,
       signature: msg.signature,
       signatureValid: CryptoEngine.verifySignature(msg.id, msg.signature, msg.author_pubkey)
     };
